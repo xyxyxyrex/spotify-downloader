@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SpotDL GUI</title>
+    <script type="module" src="/main.js" defer></script>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <div class="logo">[ spot-dl ]</div>
+        <nav>
+          <a href="#" id="nav-home" class="active">Home</a>
+          <a href="#" id="nav-search">Search</a>
+          <a href="#" id="nav-settings">Settings</a>
+        </nav>
+        <div class="playlists-section">
+          <h3>Playlists</h3>
+          <ul id="playlist-list"></ul>
+          <button id="new-playlist-btn">+ New Playlist</button>
+        </div>
+      </aside>
+
+      <div id="content-area">
+        <main id="main-content">
+          <header id="main-header">
+            <input type="text" id="search-input" placeholder="Search tracks, playlists, or paste a Spotify URL..." autocomplete="off" />
+          </header>
+
+          <div id="view-home" class="view">
+            <div id="home-browse">
+              <section class="home-section">
+                <h2>> Top Charts</h2>
+                <div id="home-row-charts" class="collection-row"></div>
+              </section>
+              <section class="home-section">
+                <h2>> Popular Tracks</h2>
+                <div id="home-row-tracks" class="collection-row"></div>
+              </section>
+              <section class="home-section">
+                <h2>> Popular Albums</h2>
+                <div id="home-row-albums" class="collection-row"></div>
+              </section>
+            </div>
+            <div id="home-collection" class="hidden">
+              <button type="button" id="home-back-btn" class="home-back-btn">&lt; Back</button>
+              <div class="collection-header">
+                <div>
+                  <h2 id="home-collection-title"></h2>
+                  <p id="home-collection-subtitle" class="collection-subtitle"></p>
+                </div>
+                <div class="view-mode-toggle">
+                  <button type="button" id="view-mode-grid" class="view-mode-btn active" title="Grid view">GRID</button>
+                  <button type="button" id="view-mode-list" class="view-mode-btn" title="List view">LIST</button>
+                </div>
+              </div>
+              <div id="home-collection-grid" class="song-grid"></div>
+            </div>
+          </div>
+
+          <div id="view-search" class="view hidden">
+            <h2>> Search Results</h2>
+            <div id="search-results-list"><span class="loading-text">Type in the search bar or paste a Spotify playlist URL...</span></div>
+          </div>
+
+          <div id="view-playlist" class="view hidden">
+            <div class="playlist-view-header">
+              <button type="button" id="playlist-back-btn" class="home-back-btn">&lt; Back</button>
+              <div>
+                <h2 id="playlist-view-title">> Playlist</h2>
+                <p id="playlist-view-meta" class="collection-subtitle"></p>
+              </div>
+            </div>
+            <div class="playlist-table-wrap">
+              <table class="playlist-table" id="playlist-tracks-table">
+                <thead>
+                  <tr>
+                    <th class="col-order">#</th>
+                    <th class="col-title">Title</th>
+                    <th class="col-album">Album</th>
+                    <th class="col-duration">Duration</th>
+                    <th class="col-plays">Plays</th>
+                    <th class="col-actions"></th>
+                  </tr>
+                </thead>
+                <tbody id="playlist-tracks-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="view-settings" class="view hidden">
+            <h2>> Settings</h2>
+            <div class="settings-panel">
+              <div class="settings-row">
+                <label for="cache-dir-input">Temporary cache location</label>
+                <div class="settings-input-group">
+                  <input type="text" id="cache-dir-input" placeholder="Default system cache" />
+                  <button type="button" class="btn-browse" data-target="cache-dir-input" data-title="Select cache folder">Browse</button>
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="spotify-id-input">Spotify Client ID</label>
+                <div class="settings-input-group">
+                  <input type="text" id="spotify-id-input" placeholder="From Spotify Developer Dashboard" autocomplete="off" />
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="spotify-secret-input">Spotify Client Secret</label>
+                <div class="settings-input-group">
+                  <input type="password" id="spotify-secret-input" placeholder="Keep secret — stored locally" autocomplete="off" />
+                </div>
+              </div>
+              <div class="settings-row">
+                <label for="download-dir-input">Downloads location</label>
+                <div class="settings-input-group">
+                  <input type="text" id="download-dir-input" placeholder="Default music/downloads folder" />
+                  <button type="button" class="btn-browse" data-target="download-dir-input" data-title="Select downloads folder">Browse</button>
+                </div>
+              </div>
+              <div class="settings-actions">
+                <button type="button" id="btn-save-settings">Save settings</button>
+                <button type="button" id="btn-reset-settings" class="btn-secondary">Reset to defaults</button>
+              </div>
+              <p id="settings-status" class="settings-status"></p>
+            </div>
+          </div>
+        </main>
+
+        <div id="detail-resizer" title="Drag to resize"></div>
+
+        <aside id="detail-sidebar">
+          <button type="button" id="detail-sidebar-toggle" title="Toggle panel" aria-label="Toggle track details">›</button>
+          <div id="detail-sidebar-inner">
+            <div id="detail-empty" class="detail-empty">
+              <p>Select a track to view metadata and album art.</p>
+            </div>
+            <div id="detail-content" class="hidden">
+              <div id="detail-art-wrap" class="detail-art-wrap">
+                <img id="detail-art" alt="Album art" />
+                <canvas id="detail-art-canvas" class="hidden"></canvas>
+              </div>
+              <h3 id="detail-title">—</h3>
+              <p id="detail-artist" class="detail-sub">—</p>
+              <p id="detail-album" class="detail-sub">—</p>
+
+              <div id="detail-meta" class="detail-meta">
+                <p class="detail-meta-loading">Loading metadata…</p>
+              </div>
+
+              <div id="detail-art-gallery" class="detail-art-gallery hidden">
+                <h4>Album art</h4>
+                <div id="detail-art-thumbs" class="detail-art-thumbs"></div>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+
+      <footer id="player-controls">
+        <div class="now-playing">
+          <div class="np-art-wrap">
+            <div id="np-art" class="np-art-container"></div>
+            <span id="np-downloaded-badge" class="np-downloaded-badge hidden" title="Saved in library">DL</span>
+          </div>
+          <div class="np-info">
+            <div id="np-title">No track selected</div>
+            <div id="np-artist">-</div>
+          </div>
+        </div>
+        <div class="controls-center">
+          <div class="transport-buttons">
+            <button type="button" id="btn-prev" class="transport-btn" title="Previous">|&lt;</button>
+            <button type="button" id="btn-play" class="transport-btn transport-btn-main" title="Play">▶</button>
+            <button type="button" id="btn-next" class="transport-btn" title="Next">&gt;|</button>
+          </div>
+          <div class="progress-container">
+            <span id="time-current">0:00</span>
+            <input type="range" id="progress-bar" value="0" min="0" max="100" />
+            <span id="time-total">0:00</span>
+          </div>
+        </div>
+        <div class="controls-right">
+          <div class="volume-control">
+            <span class="vol-label">VOL</span>
+            <input type="range" id="volume-bar" min="0" max="100" value="85" />
+          </div>
+          <div id="buffer-progress-wrap" class="buffer-progress-wrap hidden">
+            <span class="buffer-label">BUF</span>
+            <div class="buffer-track">
+              <div id="buffer-progress-bar" class="buffer-progress-bar"></div>
+            </div>
+          </div>
+          <span id="status-bar">Status: Idle</span>
+        </div>
+      </footer>
+
+      <div id="context-menu" class="hidden">
+        <ul>
+          <li id="cm-queue">Add to queue</li>
+          <li id="cm-playlist">Add to playlist</li>
+          <li id="cm-download">Download</li>
+          <li id="cm-artist">View Artist</li>
+        </ul>
+      </div>
+    </div>
+  </body>
+</html>
