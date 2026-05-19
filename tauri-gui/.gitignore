@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Tauri GUI Bundled Binaries
+bin/*
+!bin/placeholder.txt

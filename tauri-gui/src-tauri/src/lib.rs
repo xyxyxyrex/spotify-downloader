@@ -119,7 +119,24 @@ pub struct AppState {
     pub discord_rpc: Mutex<Option<DiscordIpcClient>>,
 }
 
+use std::sync::OnceLock;
+static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+
 // ---------- Helpers ----------
+
+fn get_bundled_bin_path(name: &str) -> Option<PathBuf> {
+    let handle = APP_HANDLE.get()?;
+    let filename = if cfg!(windows) {
+        format!("{}.exe", name)
+    } else {
+        name.to_string()
+    };
+    handle
+        .path()
+        .resolve(format!("bin/{}", filename), tauri::path::BaseDirectory::Resource)
+        .ok()
+        .filter(|p| p.is_file())
+}
 
 fn settings_file() -> PathBuf {
     let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -404,9 +421,6 @@ fn resolve_embed_script() -> Option<PathBuf> {
 }
 
 fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(), String> {
-    let script = resolve_embed_script()
-        .ok_or_else(|| "embed_metadata.py not found in scripts/".to_string())?;
-
     let cover_url = best_image_url(&meta.album_images)
         .or_else(|| best_image_url(&meta.track_images));
 
@@ -425,10 +439,19 @@ fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(),
 
     let json_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
-    let output = Command::new("python")
-        .arg(&script)
-        .arg(audio_path)
-        .arg(&json_str)
+    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("embed_metadata") {
+        let mut c = Command::new(bin_path);
+        c.arg(audio_path).arg(&json_str);
+        c
+    } else {
+        let script = resolve_embed_script()
+            .ok_or_else(|| "embed_metadata.py not found in scripts/".to_string())?;
+        let mut c = Command::new("python");
+        c.arg(&script).arg(audio_path).arg(&json_str);
+        c
+    };
+
+    let output = cmd
         .output()
         .map_err(|e| format!("Failed to run embed script: {}", e))?;
 
@@ -949,10 +972,17 @@ async fn stream_song(query: String, state: State<'_, AppState>) -> Result<Stream
     let yt_query = format!("ytsearch1:{} audio", query);
     let out_template = format!("{}/{}.%(ext)s", cache_dir.to_str().unwrap(), hash_str);
 
-    let output = Command::new("python")
-        .arg("-m")
-        .arg("yt_dlp")
-        .arg(&yt_query)
+    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+        let mut c = Command::new(bin_path);
+        c.arg(&yt_query);
+        c
+    } else {
+        let mut c = Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        c
+    };
+
+    let output = cmd
         .arg("-x")
         .arg("--audio-format")
         .arg("mp3")
@@ -1126,49 +1156,74 @@ fn check_system_dependencies() -> DependencyStatus {
         python_version: "Not found".to_string(),
     };
 
-    // 1. Check Python and version
-    if let Ok(output) = std::process::Command::new("python").arg("--version").output() {
-        if output.status.success() {
-            status.python = true;
-            let ver_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            status.python_version = if ver_str.is_empty() {
-                String::from_utf8_lossy(&output.stderr).trim().to_string()
-            } else {
-                ver_str
-            };
+    // First check if we have bundled standalone binaries
+    let has_bundled_ytdlp = get_bundled_bin_path("yt-dlp").is_some();
+    let has_bundled_spotdl = get_bundled_bin_path("spotdl").is_some();
+    let has_bundled_spotify_query = get_bundled_bin_path("spotify_query").is_some();
+    let has_bundled_embed_metadata = get_bundled_bin_path("embed_metadata").is_some();
+
+    if has_bundled_ytdlp {
+        status.yt_dlp = true;
+    }
+    if has_bundled_spotdl {
+        status.spotdl = true;
+    }
+    if has_bundled_spotify_query && has_bundled_embed_metadata {
+        status.python = true;
+        status.python_version = "Bundled Standalone Runtime".to_string();
+        status.syncedlyrics = true;
+    }
+
+    // 1. Check Python and version if not bundled
+    if !status.python {
+        if let Ok(output) = std::process::Command::new("python").arg("--version").output() {
+            if output.status.success() {
+                status.python = true;
+                let ver_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                status.python_version = if ver_str.is_empty() {
+                    String::from_utf8_lossy(&output.stderr).trim().to_string()
+                } else {
+                    ver_str
+                };
+            }
         }
     }
 
-    // 2. Check yt-dlp module
-    if let Ok(output) = std::process::Command::new("python")
-        .arg("-m")
-        .arg("yt_dlp")
-        .arg("--version")
-        .output()
-    {
-        status.yt_dlp = output.status.success();
+    // 2. Check yt-dlp module if not bundled
+    if !status.yt_dlp {
+        if let Ok(output) = std::process::Command::new("python")
+            .arg("-m")
+            .arg("yt_dlp")
+            .arg("--version")
+            .output()
+        {
+            status.yt_dlp = output.status.success();
+        }
     }
 
-    // 3. Check syncedlyrics module
-    if let Ok(output) = std::process::Command::new("python")
-        .arg("-c")
-        .arg("import syncedlyrics")
-        .output()
-    {
-        status.syncedlyrics = output.status.success();
+    // 3. Check syncedlyrics module if not bundled
+    if !status.syncedlyrics {
+        if let Ok(output) = std::process::Command::new("python")
+            .arg("-c")
+            .arg("import syncedlyrics")
+            .output()
+        {
+            status.syncedlyrics = output.status.success();
+        }
     }
 
-    // 4. Check spotdl module
-    // We also consider it found if we have a spotdl directory locally
-    let local_spotdl = std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
-    if local_spotdl {
-        status.spotdl = true;
-    } else if let Ok(output) = std::process::Command::new("python")
-        .arg("-c")
-        .arg("import spotdl")
-        .output()
-    {
-        status.spotdl = output.status.success();
+    // 4. Check spotdl module if not bundled
+    if !status.spotdl {
+        let local_spotdl = std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
+        if local_spotdl {
+            status.spotdl = true;
+        } else if let Ok(output) = std::process::Command::new("python")
+            .arg("-c")
+            .arg("import spotdl")
+            .output()
+        {
+            status.spotdl = output.status.success();
+        }
     }
 
     status
@@ -1227,10 +1282,17 @@ async fn download_song(query: String, state: State<'_, AppState>) -> Result<Song
     let yt_query = format!("ytsearch1:{} audio", query);
     let out_template = format!("{}/%(title)s.%(ext)s", dl_dir.to_str().unwrap());
 
-    let output = Command::new("python")
-        .arg("-m")
-        .arg("yt_dlp")
-        .arg(&yt_query)
+    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+        let mut c = Command::new(bin_path);
+        c.arg(&yt_query);
+        c
+    } else {
+        let mut c = Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        c
+    };
+
+    let output = cmd
         .arg("-x")
         .arg("--audio-format")
         .arg("mp3")
@@ -1282,11 +1344,17 @@ async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<Str
             "Spotify is not configured. Add Client ID and Secret in Settings.".to_string(),
         );
     }
-    let script = resolve_spotify_script()
-        .ok_or_else(|| "spotify_query.py not found in scripts/".to_string())?;
-
-    let mut cmd = Command::new("python");
-    cmd.arg(&script).arg(&query);
+    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("spotify_query") {
+        let mut c = Command::new(bin_path);
+        c.arg(&query);
+        c
+    } else {
+        let script = resolve_spotify_script()
+            .ok_or_else(|| "spotify_query.py not found in scripts/".to_string())?;
+        let mut c = Command::new("python");
+        c.arg(&script).arg(&query);
+        c
+    };
     for (k, v) in spotify_env_from_settings(&settings) {
         cmd.env(k, v);
     }
@@ -1376,10 +1444,17 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
     let yt_query = format!("ytsearch1:{} audio", query);
     
     // Spawn yt-dlp piping out directly
-    let mut child = tokio::process::Command::new("python")
-        .arg("-m")
-        .arg("yt_dlp")
-        .arg(&yt_query)
+    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+        let mut c = tokio::process::Command::new(bin_path);
+        c.arg(&yt_query);
+        c
+    } else {
+        let mut c = tokio::process::Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        c
+    };
+
+    let mut child = cmd
         .arg("-x")
         .arg("--audio-format")
         .arg("mp3")
@@ -1495,7 +1570,8 @@ pub fn run() {
     let discord = init_discord_rpc();
 
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(|app| {
+            let _ = APP_HANDLE.set(app.handle().clone());
             start_stream_server();
             Ok(())
         })

@@ -20,9 +20,8 @@ This desktop application allows users to search, stream, and download songs loca
 * Gapless Local Caching: Streamed tracks are saved dynamically to a high-speed local cache directory to ensure instant startup on repeat listens.
 * Theme Engine: Preloaded dark and light UI themes including Default Dark, Beige Light, Catppuccin Mocha, and Dracula. Includes a custom CSS editor allowing users to inject CSS rules or upload stylesheet configurations.
 * Spotify Playlist Import: Visual browser to search, load, and selectively import songs from public Spotify playlists. Built-in concurrency locks prevent duplicate track creations and key spams.
-* System Dependency Diagnostics: A built-in health monitor in the Settings dashboard showing the installation status of Python, yt-dlp, spotDL, and syncedlyrics with diagnostic indicators.
-* Local Disk Management: Single-click tools to purge and reset cached temporary audio tracks and safe double-confirmation purges to clean your download directories.
-* Rate Limit Protection: Ready to use with built-in developer client credentials out-of-the-box. Advanced users can provide custom Spotify Client ID, Client Secret, and Last.fm API Key overrides to bypass rate limits.
+* System Dependency Diagnostics: A built-in health monitor in the Settings dashboard showing the installation status of Python, yt-dlp, spotDL, and syncedlyrics.
+* Standalone Bundled Runtime: Complete zero-configuration setup. All core dependencies (including Python runtime utilities, yt-dlp, and spotDL) are compiled and bundled directly within the installer, removing the need for manual python or command-line dependency setups.
 
 ---
 
@@ -33,7 +32,7 @@ Go to the Releases tab of this repository and download the latest compiled Windo
 * MSI Setup (Standard Windows Setup)
 * NSIS Setup (Standalone EXE Setup Wizard)
 
-Verify that Python 3 and the required dependencies are installed on your machine. You can run the live checkup tool inside the Settings panel to confirm health.
+The application comes pre-packaged with all required runtimes. Simply run the installer and start streaming and downloading music immediately without any additional configuration.
 
 ### For Developers (Local Compilation)
 To run the project in development mode:
