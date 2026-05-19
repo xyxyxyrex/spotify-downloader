@@ -22,9 +22,30 @@ import {
     isLikedPlaylist,
     isSongLiked,
     toggleLikedSong,
+    getBestImage,
 } from "./playlists.js";
 
 const { invoke } = window.__TAURI__.core;
+
+// Memory Cache
+const memCache = new Map();
+async function cachedInvoke(command, args = {}) {
+    if (
+        [
+            "fetch_lastfm",
+            "spotify_search",
+            "fetch_track_metadata",
+            "fetch_lyrics",
+        ].includes(command)
+    ) {
+        const key = `${command}:${JSON.stringify(args)}`;
+        if (memCache.has(key)) return memCache.get(key);
+        const res = await invoke(command, args);
+        memCache.set(key, res);
+        return res;
+    }
+    return invoke(command, args);
+}
 
 const LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
 const IMAGE_SIZE_ORDER = ["mega", "extralarge", "large", "medium", "small"];
@@ -40,6 +61,23 @@ let visualizerInitialized = false;
 let currentStreamData = null;
 let isPlaying = false;
 let currentSong = null;
+
+// Discord Rich Presence helper
+function updateDiscordPresence(song, paused = false) {
+    if (!song) return;
+    invoke("discord_update_presence", {
+        payload: {
+            title: song.title || "",
+            artist: song.artist || "",
+            album: song.album || null,
+            imageUrl: song.image || null,
+            paused,
+        },
+    }).catch(() => {});
+}
+function clearDiscordPresence() {
+    invoke("discord_clear_presence").catch(() => {});
+}
 let metadataRequestId = 0;
 let lyricsRequestId = 0;
 
@@ -134,8 +172,12 @@ const bufferProgressWrap = document.getElementById("buffer-progress-wrap");
 const statusBar = document.getElementById("status-bar");
 
 let selectedSong = null;
+let selectedItems = []; // [{ key, song }]
+let selectedGroup = null; // { type: 'album' | 'playlist', name: string, fetchTracks: () => Promise<Song[]> }
 let currentCollection = null;
 let currentCollectionSongs = [];
+let downloadsSearchQuery = "";
+const downloadActivity = new Map(); // key -> { song, stage, startedAt }
 let collectionViewMode =
     localStorage.getItem("collectionViewMode") === "list" ? "list" : "grid";
 /** Where to return when leaving artist/album pages. */
@@ -561,6 +603,15 @@ function renderQueueUI() {
 
         applyDownloadedState(item, song);
 
+        item.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            selectedSong = song;
+            selectedGroup = null;
+            refreshContextMenuForSong(song);
+            showContextMenuAt(e.clientX, e.clientY);
+        });
+
         const info = document.createElement("div");
         const titleStrong = document.createElement("strong");
         titleStrong.style.color =
@@ -736,10 +787,6 @@ function getPrevQueueIndex() {
     return -1;
 }
 
-function playNextInQueue() {
-    playNextTrack();
-}
-
 function playPreviousTrack() {
     if (appQueue.length === 0) return;
     const prev = getPrevQueueIndex();
@@ -765,6 +812,13 @@ function playNextTrack() {
 function onTrackEnded() {
     btnPlay.textContent = "▶";
     isPlaying = false;
+    clearDiscordPresence();
+    
+    // Add to listening history when track ends
+    if (currentSong) {
+        invoke("add_to_history", { track: currentSong }).catch(err => console.error("Failed to add to history:", err));
+    }
+    
     if (loopMode === "one" && currentSong) {
         playSong(currentSong);
         return;
@@ -790,7 +844,7 @@ function updateLoopButton() {
         one: "Repeat one",
     };
     btnLoop.title = labels[loopMode];
-    btnLoop.textContent = loopMode === "one" ? "↻" : "↻";
+    btnLoop.textContent = "↻";
 }
 
 function updateLikeButton() {
@@ -811,11 +865,135 @@ function updateLikeButton() {
 
 function refreshContextMenuForSong(song) {
     const likedItem = document.getElementById("cm-liked");
+    const removeFromPlaylistItem = document.getElementById(
+        "cm-remove-from-playlist",
+    );
     if (likedItem && song) {
         likedItem.textContent = isSongLiked(song)
             ? "Remove from Liked Songs"
             : "Add to Liked Songs";
     }
+    const activePlaylistId = getActivePlaylistId();
+    const inActivePlaylist = Boolean(
+        activePlaylistId &&
+        (selectedItems.length
+            ? selectedItems.some((item) => item.song?.playlist_track_id)
+            : song?.playlist_track_id),
+    );
+    removeFromPlaylistItem?.classList.toggle("hidden", !inActivePlaylist);
+    document.getElementById("cm-download-group").classList.add("hidden");
+    document.getElementById("cm-download").classList.remove("hidden");
+    document.getElementById("cm-queue").classList.remove("hidden");
+    document.getElementById("cm-liked")?.classList.remove("hidden");
+    document.getElementById("cm-playlist").classList.remove("hidden");
+    document.getElementById("cm-artist").classList.remove("hidden");
+}
+
+function refreshContextMenuForGroup(group) {
+    const dlGroup = document.getElementById("cm-download-group");
+    dlGroup.textContent = `Download ${group.type === "album" ? "Album" : "Playlist"}`;
+    dlGroup.classList.remove("hidden");
+    document.getElementById("cm-download").classList.add("hidden");
+    document.getElementById("cm-queue").classList.add("hidden");
+    document.getElementById("cm-liked")?.classList.add("hidden");
+    document.getElementById("cm-playlist").classList.add("hidden");
+    document.getElementById("cm-artist").classList.add("hidden");
+}
+
+function getSongSelectionKey(song) {
+    return song?.playlist_track_id
+        ? `playlist-track:${song.playlist_track_id}`
+        : `song:${songKey(song)}`;
+}
+
+function getSelectedSongs() {
+    if (selectedItems.length) {
+        return selectedItems.map((item) => item.song);
+    }
+    return selectedSong ? [selectedSong] : [];
+}
+
+function getUniqueSelectedSongs() {
+    const seen = new Set();
+    return getSelectedSongs().filter((song) => {
+        const key = getSongSelectionKey(song);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+}
+
+function isSelectionKeySelected(selectionKey) {
+    return selectedItems.some((item) => item.key === selectionKey);
+}
+
+function syncSelectedSongClasses() {
+    document.querySelectorAll("[data-selection-key]").forEach((el) => {
+        el.classList.toggle(
+            "selected",
+            isSelectionKeySelected(el.dataset.selectionKey),
+        );
+    });
+}
+
+let lastSelectedElement = null;
+
+function setSelectedItems(items, primarySong = null) {
+    selectedItems = items;
+    selectedSong = primarySong ?? items[0]?.song ?? null;
+    selectedGroup = null;
+    syncSelectedSongClasses();
+}
+
+function setSingleSongSelection(song, element, selectionKey) {
+    setSelectedItems([{ key: selectionKey, song }], song);
+    if (element) element.classList.add("selected");
+    lastSelectedElement = element;
+}
+
+function toggleSongSelection(song, element, selectionKey) {
+    const idx = selectedItems.findIndex((item) => item.key === selectionKey);
+    if (idx >= 0) {
+        selectedItems.splice(idx, 1);
+        element?.classList.remove("selected");
+    } else {
+        selectedItems.push({ key: selectionKey, song });
+        element?.classList.add("selected");
+        lastSelectedElement = element;
+    }
+    selectedSong = song;
+    selectedGroup = null;
+}
+
+function handleSongClick(e, song, element, selectionKey) {
+    if (e.target.closest(".meta-link")) return;
+    
+    if (e.shiftKey && lastSelectedElement && lastSelectedElement.parentNode === element.parentNode) {
+        const parent = element.parentNode;
+        const children = Array.from(parent.children).filter(c => c.__song);
+        const idx1 = children.indexOf(lastSelectedElement);
+        const idx2 = children.indexOf(element);
+        
+        if (idx1 >= 0 && idx2 >= 0) {
+            const min = Math.min(idx1, idx2);
+            const max = Math.max(idx1, idx2);
+            const items = [];
+            for (let i = min; i <= max; i++) {
+                const child = children[i];
+                if (child.__song) {
+                    items.push({ key: getSongSelectionKey(child.__song), song: child.__song });
+                }
+            }
+            setSelectedItems(items, song);
+            return;
+        }
+    }
+
+    if (e.ctrlKey || e.metaKey) {
+        toggleSongSelection(song, element, selectionKey);
+        return;
+    }
+    selectSong(song, element);
 }
 
 /** Keep context menu fully visible (e.g. when opened from the player bar). */
@@ -1104,15 +1282,15 @@ async function renderArtistPageFromSpotify(data, ctx) {
 async function renderArtistPageFromLastFm(name, ctx) {
     const enc = encodeURIComponent(name);
     const [infoRaw, tracksRaw, albumsRaw] = await Promise.all([
-        invoke("fetch_lastfm", {
+        cachedInvoke("fetch_lastfm", {
             method: "artist.getInfo",
             extraParams: `&artist=${enc}`,
         }),
-        invoke("fetch_lastfm", {
+        cachedInvoke("fetch_lastfm", {
             method: "artist.getTopTracks",
             extraParams: `&artist=${enc}&limit=12`,
         }),
-        invoke("fetch_lastfm", {
+        cachedInvoke("fetch_lastfm", {
             method: "artist.getTopAlbums",
             extraParams: `&artist=${enc}&limit=50`,
         }),
@@ -1210,6 +1388,7 @@ async function openAlbumPage(albumTitle, artistName, opts = {}) {
     const metaEl = document.getElementById("album-page-meta");
     const artEl = document.getElementById("album-hero-art");
     const tracksEl = document.getElementById("album-tracks-container");
+    const heroEl = document.querySelector(".album-hero");
 
     titleEl.textContent = title;
     artistEl.replaceChildren(
@@ -1218,6 +1397,26 @@ async function openAlbumPage(albumTitle, artistName, opts = {}) {
     metaEl.textContent = "Loading…";
     artEl.innerHTML = "";
     tracksEl.innerHTML = '<span class="loading-text">Loading tracks…</span>';
+    selectedGroup = null;
+
+    const bindAlbumGroupMenu = () => {
+        const group = {
+            type: "album",
+            name: title,
+            fetchTracks: async () => albumViewSongs.slice(),
+        };
+        selectedGroup = group;
+        refreshContextMenuForGroup(group);
+    };
+
+    if (heroEl) {
+        heroEl.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            bindAlbumGroupMenu();
+            showContextMenuAt(e.clientX, e.clientY);
+        };
+    }
 
     try {
         if (opts.spotifyUrl && apiStatus.spotify_configured) {
@@ -1283,7 +1482,7 @@ async function renderAlbumPageFromSpotify(data, ctx) {
 }
 
 async function renderAlbumPageFromLastFm(title, artist, ctx) {
-    const raw = await invoke("fetch_lastfm", {
+    const raw = await cachedInvoke("fetch_lastfm", {
         method: "album.getInfo",
         extraParams: `&artist=${encodeURIComponent(artist)}&album=${encodeURIComponent(title)}`,
     });
@@ -1375,28 +1574,197 @@ function isSongDownloaded(song) {
     return downloadedKeys.has(key);
 }
 
+function isSongDownloading(song) {
+    const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
+    return downloadActivity.has(key);
+}
+
 function applyDownloadedState(element, song) {
     if (!element) return;
-    element.classList.toggle("downloaded", isSongDownloaded(song));
+    const downloaded = isSongDownloaded(song);
+    const downloading = isSongDownloading(song) && !downloaded;
+    element.classList.toggle("downloaded", downloaded);
+    element.classList.toggle("downloading", downloading);
+}
+
+function applySongDownloadStateToAllInstances(song) {
+    document
+        .querySelectorAll(`[data-song-key="${CSS.escape(songKey(song))}"]`)
+        .forEach((el) => {
+            applyDownloadedState(el, song);
+        });
+    if (currentSong && songKey(currentSong) === songKey(song)) {
+        updateNowPlayingDownloadBadge(song);
+    }
+}
+
+function renderDownloadsActivity() {
+    const card = document.getElementById("downloads-active-card");
+    const list = document.getElementById("downloads-active-list");
+    const subtitle = document.getElementById("downloads-active-subtitle");
+    const pill = document.getElementById("downloads-active-pill");
+    if (!card || !list || !subtitle || !pill) return;
+
+    const entries = [...downloadActivity.values()];
+    pill.textContent = String(entries.length);
+
+    if (!entries.length) {
+        card.classList.add("hidden");
+        subtitle.textContent = "No active downloads";
+        list.innerHTML = "";
+        return;
+    }
+
+    card.classList.remove("hidden");
+    const queuedCount = entries.filter(
+        (entry) => entry.stage === "Queued",
+    ).length;
+    const activeCount = entries.length - queuedCount;
+    subtitle.textContent =
+        queuedCount > 0 && activeCount > 0
+            ? `${activeCount} active, ${queuedCount} queued`
+            : queuedCount > 0
+              ? `${queuedCount} queued`
+              : entries.length === 1
+                ? "1 track in progress"
+                : `${entries.length} tracks in progress`;
+    list.innerHTML = "";
+
+    entries
+        .sort((a, b) => a.startedAt - b.startedAt)
+        .forEach((entry, index) => {
+            const item = document.createElement("div");
+            item.className = `downloads-active-item ${entry.stage === "Queued" ? "is-queued" : "is-active"}`;
+            item.style.setProperty("--delay", `${index * 0.08}s`);
+
+            const meta = document.createElement("div");
+            meta.className = "downloads-active-meta";
+
+            const title = document.createElement("strong");
+            title.className = "downloads-active-title";
+            title.textContent = entry.song.title;
+
+            const artist = document.createElement("span");
+            artist.className = "downloads-active-artist";
+            artist.textContent = entry.song.artist;
+
+            meta.appendChild(title);
+            meta.appendChild(artist);
+
+            const stage = document.createElement("span");
+            stage.className = "downloads-active-stage";
+            stage.textContent = entry.stage || "Downloading";
+
+            const bar = document.createElement("div");
+            bar.className = "downloads-active-bar";
+            const fill = document.createElement("div");
+            fill.className = "downloads-active-bar-fill";
+            bar.appendChild(fill);
+
+            item.appendChild(meta);
+            item.appendChild(stage);
+            item.appendChild(bar);
+            list.appendChild(item);
+        });
+}
+
+function setSongDownloadActivity(song, stage) {
+    if (!song?.title || !song?.artist) return;
+    const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
+    downloadActivity.set(key, {
+        song,
+        stage,
+        startedAt: downloadActivity.get(key)?.startedAt || Date.now(),
+    });
+    applySongDownloadStateToAllInstances(song);
+    renderDownloadsActivity();
+}
+
+function clearSongDownloadActivity(song) {
+    if (!song?.title || !song?.artist) return;
+    const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
+    downloadActivity.delete(key);
+    applySongDownloadStateToAllInstances(song);
+    renderDownloadsActivity();
+}
+
+function uniqueSongsByDownloadKey(songs) {
+    const seen = new Set();
+    const unique = [];
+    for (const song of songs || []) {
+        if (!song?.title || !song?.artist) continue;
+        const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        unique.push(song);
+    }
+    return unique;
+}
+
+async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
+    const queue = uniqueSongsByDownloadKey(songs);
+    if (!queue.length) return;
+
+    queue.forEach((song) => setSongDownloadActivity(song, "Queued"));
+    statusBar.textContent =
+        queue.length === 1
+            ? `Downloading ${queue[0].title}...`
+            : `Downloading ${queue.length} tracks with ${Math.min(maxConcurrent, queue.length)} concurrent downloads...`;
+    renderDownloadsActivity();
+
+    let nextIndex = 0;
+    const workerCount = Math.min(maxConcurrent, queue.length);
+
+    const workers = Array.from({ length: workerCount }, async () => {
+        while (nextIndex < queue.length) {
+            const currentIndex = nextIndex;
+            nextIndex += 1;
+            const song = queue[currentIndex];
+            try {
+                await downloadSongWithMetadata(song);
+            } catch (err) {
+                console.error("Failed downloading track", song, err);
+            }
+        }
+    });
+
+    await Promise.all(workers);
 }
 
 async function updateNowPlayingDownloadBadge(song) {
     if (!song) {
         npDownloadedBadge.classList.add("hidden");
+        npDownloadedBadge.classList.remove("downloading");
         return;
     }
+    const downloading = isSongDownloading(song);
     try {
         const downloaded = await invoke("is_track_downloaded", {
             artist: song.artist,
             title: song.title,
         });
-        npDownloadedBadge.classList.toggle("hidden", !downloaded);
+        npDownloadedBadge.classList.toggle(
+            "hidden",
+            !(downloaded || downloading),
+        );
+        npDownloadedBadge.classList.toggle(
+            "downloading",
+            downloading && !downloaded,
+        );
         if (downloaded) {
             const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
             downloadedKeys.add(key);
         }
     } catch {
-        npDownloadedBadge.classList.toggle("hidden", !isSongDownloaded(song));
+        const downloaded = isSongDownloaded(song);
+        npDownloadedBadge.classList.toggle(
+            "hidden",
+            !(downloaded || downloading),
+        );
+        npDownloadedBadge.classList.toggle(
+            "downloading",
+            downloading && !downloaded,
+        );
     }
 }
 
@@ -1430,6 +1798,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
 
     await loadSettingsUI();
+    checkDependencies();
     await refreshApiStatus();
     await refreshDownloadedKeys();
     await loadPlaylistsFromDisk();
@@ -1549,9 +1918,11 @@ function setupPlayer() {
         if (isPlaying) {
             audioPlayer.pause();
             btnPlay.textContent = "▶";
+            updateDiscordPresence(currentSong, true);
         } else {
             audioPlayer.play();
             btnPlay.textContent = "❚❚";
+            updateDiscordPresence(currentSong, false);
         }
         isPlaying = !isPlaying;
     });
@@ -1827,7 +2198,10 @@ async function openCollection(collection, opts = {}) {
 }
 
 async function fetchLastfmTrackRows(method, extraParams) {
-    const raw = await invoke("fetch_lastfm", { method, extraParams });
+    const raw = await cachedInvoke("fetch_lastfm", {
+        method,
+        extraParams,
+    });
     const data = JSON.parse(raw);
     if (data.error) {
         throw new Error(
@@ -1873,7 +2247,10 @@ async function fetchChartTracks(method, extraParams) {
 }
 
 async function fetchChartAlbums(method, extraParams) {
-    const raw = await invoke("fetch_lastfm", { method, extraParams });
+    const raw = await cachedInvoke("fetch_lastfm", {
+        method,
+        extraParams,
+    });
     const data = JSON.parse(raw);
     if (data.error) throw new Error(data.message || "API Error");
     const albums = data.albums?.album;
@@ -1899,7 +2276,7 @@ async function enrichSongsArt(songs, container) {
         try {
             let url = song.image;
             if (!isValidImage(url)) {
-                const meta = await invoke("fetch_track_metadata", {
+                const meta = await cachedInvoke("fetch_track_metadata", {
                     artist: song.artist,
                     track: song.title,
                 });
@@ -1975,6 +2352,9 @@ async function refreshApiStatus() {
 
 async function loadSettingsUI() {
     try {
+        // Refresh API status first to check if embedded keys or set keys are active
+        await refreshApiStatus();
+
         const [settings, cachePath, downloadPath] = await Promise.all([
             invoke("get_settings"),
             invoke("get_cache_path"),
@@ -1996,12 +2376,213 @@ async function loadSettingsUI() {
         }
         cacheDirInput.placeholder = cachePath;
         downloadDirInput.placeholder = downloadPath;
+
+        // Set elegant placeholders indicating compile-time embedded credentials
+        if (apiStatus?.spotify_configured) {
+            spotifyIdInput.placeholder = "Embedded default key active (Optional)";
+            spotifySecretInput.placeholder = "Embedded default secret active (Optional)";
+        } else {
+            spotifyIdInput.placeholder = "From Spotify Developer Dashboard";
+            spotifySecretInput.placeholder = "Keep secret — stored locally";
+        }
+
+        if (lastfmApiKeyInput) {
+            if (apiStatus?.lastfm_configured) {
+                lastfmApiKeyInput.placeholder = "Embedded default API key active (Optional)";
+            } else {
+                lastfmApiKeyInput.placeholder = "Or LASTFM_API_KEY in .env";
+            }
+        }
     } catch (err) {
         console.error("Failed to load settings:", err);
     }
 }
 
+async function checkDependencies() {
+    const pythonText = document.getElementById("dep-status-python-text");
+    const pythonIcon = document.getElementById("dep-status-python-icon");
+    const ytdlpText = document.getElementById("dep-status-ytdlp-text");
+    const ytdlpIcon = document.getElementById("dep-status-ytdlp-icon");
+    const spotdlText = document.getElementById("dep-status-spotdl-text");
+    const spotdlIcon = document.getElementById("dep-status-spotdl-icon");
+    const lyricsText = document.getElementById("dep-status-lyrics-text");
+    const lyricsIcon = document.getElementById("dep-status-lyrics-icon");
+    const tipText = document.getElementById("dependency-tip");
+
+    if (!pythonText) return;
+
+    // Reset UI to checking state
+    pythonText.textContent = "Checking...";
+    pythonIcon.style.background = "#f1c40f";
+    pythonIcon.style.boxShadow = "0 0 8px #f1c40f";
+    
+    ytdlpText.textContent = "Checking...";
+    ytdlpIcon.style.background = "#f1c40f";
+    ytdlpIcon.style.boxShadow = "0 0 8px #f1c40f";
+    
+    spotdlText.textContent = "Checking...";
+    spotdlIcon.style.background = "#f1c40f";
+    spotdlIcon.style.boxShadow = "0 0 8px #f1c40f";
+    
+    lyricsText.textContent = "Checking...";
+    lyricsIcon.style.background = "#f1c40f";
+    lyricsIcon.style.boxShadow = "0 0 8px #f1c40f";
+
+    try {
+        const res = await invoke("check_system_dependencies");
+        
+        // 1. Python 3
+        if (res.python) {
+            pythonText.textContent = res.python_version || "Found";
+            pythonIcon.style.background = "var(--accent)";
+            pythonIcon.style.boxShadow = "0 0 8px var(--accent)";
+        } else {
+            pythonText.textContent = "Not Found";
+            pythonIcon.style.background = "var(--err, #ff5555)";
+            pythonIcon.style.boxShadow = "0 0 8px var(--err, #ff5555)";
+        }
+
+        // 2. yt-dlp
+        if (res.yt_dlp) {
+            ytdlpText.textContent = "Available";
+            ytdlpIcon.style.background = "var(--accent)";
+            ytdlpIcon.style.boxShadow = "0 0 8px var(--accent)";
+        } else {
+            ytdlpText.textContent = "Missing";
+            ytdlpIcon.style.background = "var(--err, #ff5555)";
+            ytdlpIcon.style.boxShadow = "0 0 8px var(--err, #ff5555)";
+        }
+
+        // 3. spotdl
+        if (res.spotdl) {
+            spotdlText.textContent = "Available";
+            spotdlIcon.style.background = "var(--accent)";
+            spotdlIcon.style.boxShadow = "0 0 8px var(--accent)";
+        } else {
+            spotdlText.textContent = "Missing";
+            spotdlIcon.style.background = "var(--err, #ff5555)";
+            spotdlIcon.style.boxShadow = "0 0 8px var(--err, #ff5555)";
+        }
+
+        // 4. syncedlyrics
+        if (res.syncedlyrics) {
+            lyricsText.textContent = "Available";
+            lyricsIcon.style.background = "var(--accent)";
+            lyricsIcon.style.boxShadow = "0 0 8px var(--accent)";
+        } else {
+            lyricsText.textContent = "Missing";
+            lyricsIcon.style.background = "var(--err, #ff5555)";
+            lyricsIcon.style.boxShadow = "0 0 8px var(--err, #ff5555)";
+        }
+
+        // Write tip
+        let missing = [];
+        if (!res.python) missing.push("Python 3");
+        if (!res.yt_dlp) missing.push("yt-dlp");
+        if (!res.spotdl) missing.push("spotDL");
+        if (!res.syncedlyrics) missing.push("syncedlyrics");
+
+        if (missing.length > 0) {
+            tipText.innerHTML = `⚠️ Missing dependencies: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--err); font-size: 0.8rem;">${missing.join(", ")}</code>. Run: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--fg); font-family: monospace; font-size: 0.8rem;">pip install spotdl yt-dlp syncedlyrics</code>`;
+        } else {
+            tipText.innerHTML = `✨ All dependencies are successfully installed and active!`;
+        }
+
+    } catch (err) {
+        console.error("Dependency check failed:", err);
+    }
+}
+
+document.getElementById("btn-recheck-dependencies")?.addEventListener("click", checkDependencies);
+
+function applyTheme(themeName, customCssCode) {
+    let style = document.getElementById("custom-theme-style");
+    if (!style) {
+        style = document.createElement("style");
+        style.id = "custom-theme-style";
+        document.head.appendChild(style);
+    }
+    
+    let generatedCss = customCssCode || "";
+    
+    // Built-in themes overrides
+    if (themeName === "light") {
+        generatedCss = `:root {
+            --bg: #f5f2eb;
+            --bg-panel: #ebe7de;
+            --bg-hover: #dfdcd3;
+            --bg-card: #ece9df;
+            --fg: #3d3b37;
+            --fg-muted: #757065;
+            --border: #d4d0c5;
+            --accent: #cd6848;
+            --font-family: 'Segoe UI', system-ui, sans-serif;
+        }\n` + generatedCss;
+    } else if (themeName === "catppuccin-mocha") {
+        generatedCss = `:root {
+            --bg: #1e1e2e;
+            --bg-panel: #11111b;
+            --bg-hover: #313244;
+            --bg-card: #181825;
+            --fg: #cdd6f4;
+            --fg-muted: #a6adc8;
+            --border: #313244;
+            --accent: #cba6f7;
+            --font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        }\n` + generatedCss;
+    } else if (themeName === "dracula") {
+        generatedCss = `:root {
+            --bg: #282a36;
+            --bg-panel: #21222c;
+            --bg-hover: #44475a;
+            --bg-card: #282a36;
+            --fg: #f8f8f2;
+            --fg-muted: #bfbfbf;
+            --border: #44475a;
+            --accent: #ff79c6;
+            --font-family: 'Fira Code', monospace;
+        }\n` + generatedCss;
+    }
+
+    style.innerHTML = generatedCss;
+}
+
+// Initial theme load
+applyTheme(localStorage.getItem("app-theme") || "default", localStorage.getItem("app-custom-css") || "");
+
 function setupSettings() {
+    // Theme logic
+    const themeSelect = document.getElementById("theme-select");
+    const customCssInput = document.getElementById("custom-css-input");
+    const btnImportCss = document.getElementById("btn-import-css");
+    const cssFileInput = document.getElementById("css-file-input");
+
+    if (themeSelect) themeSelect.value = localStorage.getItem("app-theme") || "default";
+    if (customCssInput) customCssInput.value = localStorage.getItem("app-custom-css") || "";
+
+    themeSelect?.addEventListener("change", () => {
+        applyTheme(themeSelect.value, customCssInput.value);
+    });
+
+    customCssInput?.addEventListener("input", () => {
+        applyTheme(themeSelect.value, customCssInput.value);
+    });
+
+    btnImportCss?.addEventListener("click", () => cssFileInput?.click());
+
+    cssFileInput?.addEventListener("change", (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            if (customCssInput) {
+                customCssInput.value = ev.target.result;
+                applyTheme(themeSelect.value, customCssInput.value);
+            }
+        };
+        reader.readAsText(file);
+    });
+
     document.querySelectorAll(".btn-browse").forEach((btn) => {
         btn.addEventListener("click", async () => {
             const targetId = btn.dataset.target;
@@ -2020,6 +2601,10 @@ function setupSettings() {
         .getElementById("btn-save-settings")
         .addEventListener("click", async () => {
             try {
+                // Save theme preferences
+                if (themeSelect) localStorage.setItem("app-theme", themeSelect.value);
+                if (customCssInput) localStorage.setItem("app-custom-css", customCssInput.value);
+
                 await invoke("set_settings", {
                     input: {
                         cacheDir: cacheDirInput.value.trim() || null,
@@ -2063,6 +2648,66 @@ function setupSettings() {
                 setSettingsStatus(`Reset failed: ${err}`, "err");
             }
         });
+
+    document.getElementById("btn-export-settings").addEventListener("click", async () => {
+        try {
+            const settings = await invoke("get_settings");
+            const playlistsData = getPlaylists();
+            const history = await invoke("get_history").catch(() => ({}));
+            
+            const exportData = {
+                settings,
+                playlists: playlistsData,
+                history
+            };
+            
+            const filename = `spot-dl-config-${new Date().toISOString().slice(0,10)}.json`;
+            await invoke("save_file_dialog", { 
+                filename, 
+                content: JSON.stringify(exportData, null, 2) 
+            });
+            
+            setSettingsStatus("Configs exported successfully.", "ok");
+        } catch (err) {
+            setSettingsStatus(`Export failed: ${err}`, "err");
+        }
+    });
+
+    document.getElementById("btn-import-settings").addEventListener("click", async () => {
+        try {
+            const content = await invoke("pick_json_file");
+            if (!content) return; // user cancelled
+
+            const data = JSON.parse(content);
+            if (data.settings) {
+                await invoke("set_settings", {
+                    input: {
+                        cacheDir: data.settings.cacheDir ?? data.settings.cache_dir ?? null,
+                        downloadDir: data.settings.downloadDir ?? data.settings.download_dir ?? null,
+                        spotifyClientId: data.settings.spotifyClientId ?? data.settings.spotify_client_id ?? null,
+                        spotifyClientSecret: data.settings.spotifyClientSecret ?? data.settings.spotify_client_secret ?? null,
+                        lastfmApiKey: data.settings.lastfmApiKey ?? data.settings.lastfm_api_key ?? null,
+                    }
+                });
+            }
+            
+            if (data.playlists && Array.isArray(data.playlists)) {
+                await invoke("save_playlists", { playlists: data.playlists });
+                await loadPlaylistsFromDisk();
+                renderPlaylists();
+            }
+            
+            if (data.history && typeof data.history === 'object' && !Array.isArray(data.history)) {
+                await invoke("import_history", { history: data.history }).catch(err => console.error("History import err:", err));
+            }
+            
+            await loadSettingsUI();
+            await refreshApiStatus();
+            setSettingsStatus("Configs imported successfully.", "ok");
+        } catch (err) {
+            setSettingsStatus(`Import failed: ${err}`, "err");
+        }
+    });
 }
 
 function setSettingsStatus(msg, kind) {
@@ -2149,15 +2794,15 @@ function mapSpotifyTrack(t) {
         title: t.title,
         artist: t.artist,
         album: t.album || null,
-        image: t.image || null,
-        duration: t.duration,
-        spotify_url: t.spotify_url,
+        image: t.image || t.album_art || t.cover_url || null,
+        duration: t.duration ? Math.floor(t.duration) : null,
+        spotify_url: t.spotify_url || t.url || null,
         popularity: t.popularity,
     };
 }
 
 async function runSpotifySearch(query) {
-    const raw = await invoke("spotify_search", { query });
+    const raw = await cachedInvoke("spotify_search", { query });
     return JSON.parse(raw);
 }
 
@@ -2269,7 +2914,7 @@ async function renderUnifiedSearchResults(data, target, titlePrefix = "") {
 }
 
 async function searchLastFmTracks(query) {
-    const raw = await invoke("fetch_lastfm", {
+    const raw = await cachedInvoke("fetch_lastfm", {
         method: "track.search",
         extraParams: `&track=${encodeURIComponent(query)}&limit=20`,
     });
@@ -2302,7 +2947,7 @@ async function renderSpotifySearchResults(
         header.className = "search-section";
         header.innerHTML = `
       <h3>> ${escapeHtml(titlePrefix)}Playlist: ${escapeHtml(data.name)}</h3>
-      <p class="collection-subtitle">${escapeHtml(data.author || "")} · ${data.tracks?.length || 0} tracks</p>
+    <p class="collection-subtitle">${escapeHtml(data.author || "")} · ${data.tracks?.length || 0} tracks</p>
     `;
         target.appendChild(header);
         const songs = (data.tracks || []).map(mapSpotifyTrack);
@@ -2467,8 +3112,12 @@ async function renderSongGrid(songs, container) {
     for (const song of songs) {
         const tile = document.createElement("div");
         tile.className = "song-tile";
+        const selectionKey = getSongSelectionKey(song);
         tile.dataset.songKey = songKey(song);
+        tile.dataset.selectionKey = selectionKey;
+        tile.__song = song;
         applyDownloadedState(tile, song);
+        tile.classList.toggle("selected", isSelectionKeySelected(selectionKey));
 
         const artDiv = document.createElement("div");
         artDiv.className = "tile-art";
@@ -2494,9 +3143,17 @@ async function renderSongGrid(songs, container) {
             tile.appendChild(albumSpan);
         }
 
+        tile.addEventListener("click", (e) => handleSongClick(e, song, tile, selectionKey));
+
         tile.addEventListener("contextmenu", (e) => {
             e.preventDefault();
-            selectedSong = song;
+            e.stopPropagation();
+            if (!isSelectionKeySelected(selectionKey)) {
+                setSingleSongSelection(song, tile, selectionKey);
+            } else {
+                selectedSong = song;
+            }
+            selectedGroup = null;
             refreshContextMenuForSong(song);
             showContextMenuAt(e.clientX, e.clientY);
         });
@@ -2533,6 +3190,27 @@ async function renderAlbumGrid(albums, container) {
                 spotifyUrl: album.spotify_url,
             });
         });
+
+        tile.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            selectedGroup = {
+                type: "album",
+                name: album.title,
+                fetchTracks: async () => {
+                    const data = await cachedInvoke("spotify_search", {
+                        query: `album:${album.title}`,
+                    });
+                    const res = JSON.parse(data);
+                    if (res && res.type === "album" && res.tracks) {
+                        return res.tracks.map(mapSpotifyTrack);
+                    }
+                    return [];
+                },
+            };
+            refreshContextMenuForGroup(selectedGroup);
+            showContextMenuAt(e.clientX, e.clientY);
+        });
+
         container.appendChild(tile);
     }
     enrichAlbumsArt(albums, container);
@@ -2544,7 +3222,7 @@ async function enrichAlbumsArt(albums, container) {
         5,
         async (album) => {
             try {
-                const raw = await invoke("fetch_lastfm", {
+                const raw = await cachedInvoke("fetch_lastfm", {
                     method: "album.getInfo",
                     extraParams: `&artist=${encodeURIComponent(album.artist)}&album=${encodeURIComponent(album.title)}`,
                 });
@@ -2578,8 +3256,12 @@ async function renderSongList(songs, container) {
     for (const song of songs) {
         const el = document.createElement("div");
         el.className = "song-item";
+        const selectionKey = getSongSelectionKey(song);
         el.dataset.songKey = songKey(song);
+        el.dataset.selectionKey = selectionKey;
+        el.__song = song;
         applyDownloadedState(el, song);
+        el.classList.toggle("selected", isSelectionKeySelected(selectionKey));
 
         const artDiv = document.createElement("div");
         artDiv.className = "item-art";
@@ -2617,9 +3299,17 @@ async function renderSongList(songs, container) {
         el.appendChild(artDiv);
         el.appendChild(infoDiv);
 
+        el.addEventListener("click", (e) => handleSongClick(e, song, el, selectionKey));
+
         el.addEventListener("contextmenu", (e) => {
             e.preventDefault();
-            selectedSong = song;
+            e.stopPropagation();
+            if (!isSelectionKeySelected(selectionKey)) {
+                setSingleSongSelection(song, el, selectionKey);
+            } else {
+                selectedSong = song;
+            }
+            selectedGroup = null;
             refreshContextMenuForSong(song);
             showContextMenuAt(e.clientX, e.clientY);
         });
@@ -2638,7 +3328,8 @@ function highlightSelected(element) {
 }
 
 async function selectSong(song, element) {
-    highlightSelected(element);
+    const selectionKey = getSongSelectionKey(song);
+    setSingleSongSelection(song, element, selectionKey);
     currentSong = song;
     await showDetailSidebarPreview(song);
     fetchAndShowMetadata(song);
@@ -2802,7 +3493,7 @@ async function restoreLastPlayedSession() {
 async function fetchAndShowMetadata(song) {
     const requestId = ++metadataRequestId;
     try {
-        const meta = await invoke("fetch_track_metadata", {
+        const meta = await cachedInvoke("fetch_track_metadata", {
             artist: song.artist,
             track: song.title,
         });
@@ -2885,62 +3576,91 @@ function renderMetadataPanel(meta) {
 async function downloadSongWithMetadata(song) {
     setBuffering(true);
     statusBar.textContent = `Downloading ${song.title}...`;
+    setSongDownloadActivity(song, "Fetching metadata");
     try {
         let meta = song.meta;
         if (!meta) {
-            meta = await invoke("fetch_track_metadata", {
+            meta = await cachedInvoke("fetch_track_metadata", {
                 artist: song.artist,
                 track: song.title,
             });
             song.meta = meta;
         }
 
+        setSongDownloadActivity(song, "Downloading audio");
         const query = `${song.title} ${song.artist}`;
         const streamInfo = await invoke("stream_song", { query });
+        setSongDownloadActivity(song, "Saving file");
         const savedPath = await invoke("save_song_with_metadata", {
             cachedPath: streamInfo.file_path,
             metadata: meta,
         });
 
         await refreshDownloadedKeys();
-        document
-            .querySelectorAll(`[data-song-key="${CSS.escape(songKey(song))}"]`)
-            .forEach((el) => {
-                applyDownloadedState(el, song);
-            });
+        applySongDownloadStateToAllInstances(song);
         await updateNowPlayingDownloadBadge(song);
+        if (views.downloads && !views.downloads.classList.contains("hidden")) {
+            await renderDownloadsList(downloadsSearchQuery);
+        }
 
         statusBar.textContent = `Saved: ${savedPath}`;
         return savedPath;
     } catch (e) {
         statusBar.textContent = `Error: ${e}`;
+        showModal(
+            "Download Failed",
+            `<p style="margin-bottom: 0.8rem; font-size: 1.05rem;">Could not download <strong>${escapeHtml(song.title)}</strong> by <strong>${escapeHtml(song.artist)}</strong>.</p>
+             <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45; margin-bottom: 0.5rem;">
+                This error typically occurs when the song/audio source <strong>cannot be found on YouTube</strong>, or when the video is blocked/restricted.
+             </p>
+             <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">
+                Please verify the track details or check your internet connection and try again.
+             </p>`,
+            () => {},
+            "Close",
+            false // Hide the cancel button since it's just an alert
+        );
         throw e;
     } finally {
+        clearSongDownloadActivity(song);
         setBuffering(false);
     }
 }
 
 function setupContextMenu() {
     document.getElementById("cm-queue").addEventListener("click", () => {
-        if (selectedSong) {
-            appQueue.push(selectedSong);
+        const songs = getUniqueSelectedSongs();
+        if (songs.length) {
+            appQueue.push(...songs);
             renderQueueUI();
-            statusBar.textContent = `Added to Queue: ${selectedSong.title}`;
+            statusBar.textContent =
+                songs.length === 1
+                    ? `Added to Queue: ${songs[0].title}`
+                    : `Added ${songs.length} tracks to Queue`;
         }
     });
     document.getElementById("cm-liked")?.addEventListener("click", async () => {
-        if (!selectedSong) return;
-        const liked = await toggleLikedSong(selectedSong);
-        if (currentSong && songKey(currentSong) === songKey(selectedSong)) {
-            updateLikeButton();
+        const songs = getUniqueSelectedSongs();
+        if (!songs.length) return;
+        let likedCount = 0;
+        for (const song of songs) {
+            const liked = await toggleLikedSong(song);
+            if (liked) likedCount++;
+            if (currentSong && songKey(currentSong) === songKey(song)) {
+                updateLikeButton();
+            }
         }
         renderPlaylistSidebar();
-        statusBar.textContent = liked
-            ? `Added to Liked Songs: ${selectedSong.title}`
-            : `Removed from Liked Songs: ${selectedSong.title}`;
+        statusBar.textContent =
+            songs.length === 1
+                ? isSongLiked(songs[0])
+                    ? `Added to Liked Songs: ${songs[0].title}`
+                    : `Removed from Liked Songs: ${songs[0].title}`
+                : `Toggled Liked Songs for ${songs.length} tracks`;
     });
     document.getElementById("cm-playlist").addEventListener("click", () => {
-        if (!selectedSong) return;
+        const songs = getUniqueSelectedSongs();
+        if (!songs.length) return;
         const pls = getPlaylists();
 
         if (!pls.length) {
@@ -2953,9 +3673,14 @@ function setupContextMenu() {
                         .value.trim();
                     if (!name) return false;
                     const pl = await createPlaylist(name);
-                    await addTrackToPlaylist(pl.id, selectedSong);
+                    for (const song of songs) {
+                        await addTrackToPlaylist(pl.id, song);
+                    }
                     renderPlaylistSidebar();
-                    statusBar.textContent = `Added to ${pl.name}`;
+                    statusBar.textContent =
+                        songs.length === 1
+                            ? `Added to ${pl.name}`
+                            : `Added ${songs.length} tracks to ${pl.name}`;
                 },
                 "Create & Add",
             );
@@ -2974,15 +3699,20 @@ function setupContextMenu() {
             .join("");
         showModal(
             "Add to Playlist",
-            `<p>Select a playlist for <strong>${escapeHtml(selectedSong.title)}</strong>:</p>
+            `<p>Select a playlist for <strong>${escapeHtml(songs[0].title)}${songs.length > 1 ? ` + ${songs.length - 1} more` : ""}</strong>:</p>
                  <select id="modal-playlist-select">${options}</select>`,
             async () => {
                 const select = document.getElementById("modal-playlist-select");
                 const plId = select.value;
                 const pl = getPlaylist(plId);
                 if (plId && pl) {
-                    await addTrackToPlaylist(plId, selectedSong);
-                    statusBar.textContent = `Added to ${pl.name}`;
+                    for (const song of songs) {
+                        await addTrackToPlaylist(plId, song);
+                    }
+                    statusBar.textContent =
+                        songs.length === 1
+                            ? `Added to ${pl.name}`
+                            : `Added ${songs.length} tracks to ${pl.name}`;
                     if (getActivePlaylistId() === plId) openPlaylistView(plId);
                 }
             },
@@ -2990,9 +3720,52 @@ function setupContextMenu() {
         );
     });
     document
+        .getElementById("cm-remove-from-playlist")
+        .addEventListener("click", async () => {
+            const plId = getActivePlaylistId();
+            const items = selectedItems.filter(
+                (item) => item.song?.playlist_track_id,
+            );
+            if (!plId || !items.length) return;
+            for (const item of items) {
+                await removePlaylistTrack(plId, item.song.playlist_track_id);
+            }
+            renderPlaylistSidebar();
+            statusBar.textContent =
+                items.length === 1
+                    ? `Removed from playlist: ${items[0].song.title}`
+                    : `Removed ${items.length} tracks from playlist`;
+            if (
+                views.playlist &&
+                !views.playlist.classList.contains("hidden")
+            ) {
+                openPlaylistView(plId);
+            }
+        });
+    document
         .getElementById("cm-download")
         .addEventListener("click", async () => {
-            if (selectedSong) await downloadSongWithMetadata(selectedSong);
+            const songs = getUniqueSelectedSongs();
+            if (!songs.length) return;
+            if (songs.length === 1) {
+                await downloadSongWithMetadata(songs[0]);
+                return;
+            }
+            await downloadSongsWithConcurrency(songs, 2);
+        });
+    document
+        .getElementById("cm-download-group")
+        .addEventListener("click", async () => {
+            if (selectedGroup) {
+                statusBar.textContent = `Fetching tracks for ${selectedGroup.name}...`;
+                try {
+                    const tracks = await selectedGroup.fetchTracks();
+                    await downloadSongsWithConcurrency(tracks, 2);
+                    statusBar.textContent = `Downloaded ${tracks.length} tracks from ${selectedGroup.name}`;
+                } catch (e) {
+                    statusBar.textContent = `Error fetching group tracks: ${e}`;
+                }
+            }
         });
     document.getElementById("cm-artist").addEventListener("click", () => {
         if (selectedSong?.artist) {
@@ -3056,6 +3829,7 @@ async function playSong(song) {
         isPlaying = true;
         btnPlay.textContent = "❚❚";
         statusBar.textContent = `Playing: ${song.title}`;
+        updateDiscordPresence(song, false);
 
         const plId = getActivePlaylistId();
         if (plId && song.playlist_track_id) {
@@ -3182,6 +3956,16 @@ function renderPlaylistSidebar() {
 
         li.style.cursor = "pointer";
         li.addEventListener("click", () => openPlaylistView(pl.id));
+        li.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            selectedGroup = {
+                type: "playlist",
+                name: pl.name,
+                fetchTracks: async () => pl.tracks.map(trackToSong),
+            };
+            refreshContextMenuForGroup(selectedGroup);
+            showContextMenuAt(e.clientX, e.clientY);
+        });
 
         li.appendChild(label);
         if (!isLikedPlaylist(pl.id)) {
@@ -3217,8 +4001,83 @@ async function openPlaylistView(playlistId) {
     document.getElementById("playlist-view-meta").textContent =
         `${pl.tracks.length} tracks · ${formatDuration(totalSecs) || "0:00"} total`;
 
+    const playlistHeaderEl = document.querySelector(".playlist-view-header");
+    if (playlistHeaderEl) {
+        playlistHeaderEl.oncontextmenu = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            selectedGroup = {
+                type: "playlist",
+                name: pl.name,
+                fetchTracks: async () =>
+                    [...getPlaylist(playlistId).tracks]
+                        .sort((a, b) => a.order - b.order)
+                        .map(trackToSong),
+            };
+            refreshContextMenuForGroup(selectedGroup);
+            showContextMenuAt(e.clientX, e.clientY);
+        };
+    }
+
+    const rescanBtn = document.getElementById("playlist-rescan-btn");
+    rescanBtn.onclick = async () => {
+        rescanBtn.disabled = true;
+        rescanBtn.textContent = "Scanning...";
+        const missing = pl.tracks.filter(
+            (t) => !t.image || t.image.includes("2a96cbd8b46e442fc41c2b86b821562f") || !t.duration_secs
+        );
+        let updated = 0;
+        for (const track of missing) {
+            try {
+                const meta = await cachedInvoke("fetch_track_metadata", {
+                    artist: track.artist,
+                    track: track.title,
+                });
+                if (!meta) continue;
+                let changed = false;
+                if (meta.duration_secs != null && !track.duration_secs) {
+                    track.duration_secs = meta.duration_secs;
+                    changed = true;
+                }
+                if (meta.album && !track.album) {
+                    track.album = meta.album;
+                    changed = true;
+                }
+                const bestImg = getBestImage(meta);
+                if (bestImg && (!track.image || track.image.includes("2a96cbd8b46e442fc41c2b86b821562f"))) {
+                    track.image = bestImg;
+                    changed = true;
+                }
+                if (changed) updated++;
+            } catch (e) {
+                console.error(`Rescan failed for ${track.title}:`, e);
+            }
+        }
+        if (updated > 0) {
+            await persistPlaylists();
+        }
+        rescanBtn.disabled = false;
+        rescanBtn.textContent = `Rescan metadata`;
+        openPlaylistView(playlistId);
+    };
+
     const tbody = document.getElementById("playlist-tracks-body");
     tbody.innerHTML = "";
+    tbody.ondragover = (e) => {
+        e.preventDefault();
+    };
+    tbody.ondrop = async (e) => {
+        const from = Number(e.dataTransfer.getData("text/plain"));
+        if (Number.isNaN(from)) return;
+        const targetRow = e.target.closest("tr");
+        if (!targetRow) {
+            const to = sorted.length - 1;
+            if (from !== to) {
+                await reorderPlaylistTracks(playlistId, from, to);
+                openPlaylistView(playlistId);
+            }
+        }
+    };
 
     const sorted = [...pl.tracks].sort((a, b) => a.order - b.order);
     const playlistSongs = sorted.map(trackToSong);
@@ -3229,14 +4088,21 @@ async function openPlaylistView(playlistId) {
         tr.draggable = true;
         tr.dataset.trackId = track.id;
         tr.dataset.index = String(i);
+        const song = trackToSong(track);
+        const selectionKey = getSongSelectionKey(song);
+        tr.dataset.selectionKey = selectionKey;
+        tr.__song = song;
+        tr.classList.toggle("selected", isSelectionKeySelected(selectionKey));
 
         tr.addEventListener("dragstart", (e) => {
+            e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.setData("text/plain", String(i));
             tr.classList.add("dragging");
         });
         tr.addEventListener("dragend", () => tr.classList.remove("dragging"));
         tr.addEventListener("dragover", (e) => {
             e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
             tr.classList.add("drag-over");
         });
         tr.addEventListener("dragleave", () =>
@@ -3253,6 +4119,21 @@ async function openPlaylistView(playlistId) {
             }
         });
 
+        tr.addEventListener("contextmenu", (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!isSelectionKeySelected(selectionKey)) {
+                setSingleSongSelection(song, tr, selectionKey);
+            } else {
+                selectedSong = song;
+            }
+            selectedGroup = null;
+            refreshContextMenuForSong(song);
+            showContextMenuAt(e.clientX, e.clientY);
+        });
+
+        tr.addEventListener("click", (e) => handleSongClick(e, song, tr, selectionKey));
+
         const artTd = document.createElement("td");
         artTd.className = "col-order";
         artTd.textContent = String(i + 1);
@@ -3261,7 +4142,6 @@ async function openPlaylistView(playlistId) {
         titleTd.className = "col-title";
         const artWrap = document.createElement("span");
         artWrap.className = "playlist-track-art";
-        const song = trackToSong(track);
         await appendArt(artWrap, song, 40);
         const textWrap = document.createElement("span");
         const titleLine = document.createElement("span");
@@ -3313,14 +4193,12 @@ async function openPlaylistView(playlistId) {
         tr.appendChild(durTd);
         tr.appendChild(playsTd);
         tr.appendChild(actTd);
-
-        tr.addEventListener("click", () => selectSong(song, tr));
         tbody.appendChild(tr);
     }
 }
 
 // Modal helper system
-function showModal(title, contentHtml, onConfirm, confirmText = "Confirm") {
+function showModal(title, contentHtml, onConfirm, confirmText = "Confirm", showCancel = true) {
     const overlay = document.getElementById("modal-overlay");
     const titleEl = document.getElementById("modal-title");
     const bodyEl = document.getElementById("modal-body");
@@ -3330,6 +4208,7 @@ function showModal(title, contentHtml, onConfirm, confirmText = "Confirm") {
     titleEl.textContent = title;
     bodyEl.innerHTML = contentHtml;
     confirmBtn.textContent = confirmText;
+    cancelBtn.style.display = showCancel ? "" : "none";
 
     const cleanup = () => {
         overlay.classList.add("hidden");
@@ -3387,6 +4266,30 @@ document
         }
     });
 
+document
+    .getElementById("btn-delete-all-downloads")
+    ?.addEventListener("click", () => {
+        showModal(
+            "Delete All Downloads",
+            `<p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500;">Are you absolutely sure you want to delete all saved music?</p>
+             <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">This will permanently delete all downloaded MP3 files from your storage and reset the downloaded library view. This cannot be undone.</p>`,
+            async () => {
+                try {
+                    await invoke("delete_all_downloads");
+                    await refreshDownloadedKeys();
+                    if (views.downloads && !views.downloads.classList.contains("hidden")) {
+                        await renderDownloadsList(downloadsSearchQuery);
+                    }
+                    statusBar.textContent = "All downloads successfully deleted!";
+                } catch (err) {
+                    statusBar.textContent = `Failed to delete downloads: ${err}`;
+                    showModal("Error", `<p>Could not delete downloads: ${escapeHtml(err)}</p>`, () => {}, "Close", false);
+                }
+            },
+            "Delete Everything"
+        );
+    });
+
 let _allDownloadsCache = {};
 
 function downloadsTableMessage(tbody, className, message) {
@@ -3401,9 +4304,11 @@ function downloadsTableMessage(tbody, className, message) {
 }
 
 async function renderDownloadsList(searchQuery = "") {
+    downloadsSearchQuery = searchQuery;
     const tbody = document.getElementById("downloads-tracks-body");
     if (!tbody) return;
     downloadsTableMessage(tbody, "downloads-loading", "Loading…");
+    renderDownloadsActivity();
 
     try {
         const index = await invoke("get_download_index");
@@ -3498,8 +4403,188 @@ async function renderDownloadsList(searchQuery = "") {
             `Error loading downloads: ${err}`,
         );
     }
+    renderDownloadsActivity();
 }
 
 document.getElementById("downloads-search")?.addEventListener("input", (e) => {
     renderDownloadsList(e.target.value);
 });
+
+document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+        if (document.activeElement && (document.activeElement.tagName === "INPUT" || document.activeElement.tagName === "TEXTAREA")) {
+            return;
+        }
+        e.preventDefault();
+        
+        const activeMain = getActiveMainView();
+        let container = null;
+        if (activeMain === "home") container = document.getElementById("main-content");
+        else container = views[activeMain];
+        
+        if (!container) return;
+        
+        const songEls = Array.from(container.querySelectorAll(".song-tile, .song-item, tr[data-selection-key]")).filter(el => el.__song && el.offsetParent !== null);
+        
+        if (songEls.length > 0) {
+            const items = songEls.map(el => ({
+                key: getSongSelectionKey(el.__song),
+                song: el.__song
+            }));
+            setSelectedItems(items, items[0].song);
+            lastSelectedElement = songEls[songEls.length - 1]; // or songEls[0]
+        }
+    }
+});
+
+window.addEventListener("playlist-updated", (e) => {
+    const { playlistId } = e.detail;
+    renderPlaylists();
+    if (activeView === "playlist" && getActivePlaylistId() === playlistId) {
+        openPlaylistView(playlistId);
+    }
+});
+
+
+// ── Spotify Import Modal ──────────────────────────────────────────────
+setTimeout(() => {
+    const importModal = document.getElementById("spotify-import-modal");
+    if (!importModal) return;
+
+    let selectedPlaylists = new Map();
+    const btnImportSelected = document.getElementById("btn-import-selected");
+
+    function updateImportSelectedBtn() {
+        if (!btnImportSelected) return;
+        if (selectedPlaylists.size > 0) {
+            btnImportSelected.classList.remove("hidden");
+            btnImportSelected.disabled = false;
+            btnImportSelected.textContent = `Import Selected (${selectedPlaylists.size})`;
+        } else {
+            btnImportSelected.disabled = true;
+            btnImportSelected.textContent = "Import Selected";
+        }
+    }
+
+    document.getElementById("import-spotify-btn")?.addEventListener("click", () => {
+        importModal.style.display = "flex";
+        document.getElementById("spotify-import-input").value = "";
+        document.getElementById("spotify-import-results").innerHTML = "";
+        selectedPlaylists.clear();
+        updateImportSelectedBtn();
+        btnImportSelected?.classList.add("hidden");
+        setTimeout(() => document.getElementById("spotify-import-input").focus(), 50);
+    });
+
+    document.getElementById("btn-cancel-import")?.addEventListener("click", () => {
+        importModal.style.display = "none";
+    });
+
+    document.getElementById("spotify-import-input")?.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") document.getElementById("btn-fetch-import")?.click();
+    });
+
+    let isFetching = false;
+    document.getElementById("btn-fetch-import")?.addEventListener("click", async () => {
+        if (isFetching) return;
+        const rawInput = document.getElementById("spotify-import-input").value.trim();
+        if (!rawInput) return;
+
+        isFetching = true;
+        const btnFetch = document.getElementById("btn-fetch-import");
+        if (btnFetch) btnFetch.disabled = true;
+        const resultsContainer = document.getElementById("spotify-import-results");
+        resultsContainer.innerHTML = '<p style="text-align:center;">Fetching public playlists\u2026</p>';
+        selectedPlaylists.clear();
+        updateImportSelectedBtn();
+
+        try {
+            const query = rawInput.includes("open.spotify.com/user/") ? rawInput : `user:${rawInput}`;
+            const jsonStr = await invoke("spotify_search", { query });
+            const data = JSON.parse(jsonStr);
+
+            if (data.type !== "user_playlists" || !data.playlists || data.playlists.length === 0) {
+                resultsContainer.innerHTML = "<p>No public playlists found for this user.</p>";
+                return;
+            }
+
+            resultsContainer.innerHTML = "";
+            data.playlists.forEach(pl => {
+                const el = document.createElement("div");
+                el.className = "spotify-import-card";
+                
+                const img = pl.image || "default.png";
+                const name = escapeHtml(pl.name);
+                const owner = escapeHtml(pl.owner);
+                el.innerHTML = `
+                    <img src="${img}" style="width:48px;height:48px;object-fit:cover;border-radius:4px;" />
+                    <div style="flex:1;text-align:left;">
+                        <h4 style="margin:0;font-size:14px;">${name}</h4>
+                        <p style="margin:0;font-size:12px;color:var(--fg-muted);">${pl.tracks_total} tracks \u2022 By ${owner}</p>
+                    </div>
+                `;
+
+                el.addEventListener("click", () => {
+                    if (selectedPlaylists.has(pl.id)) {
+                        selectedPlaylists.delete(pl.id);
+                        el.classList.remove("selected");
+                    } else {
+                        selectedPlaylists.set(pl.id, pl);
+                        el.classList.add("selected");
+                    }
+                    updateImportSelectedBtn();
+                });
+
+                resultsContainer.appendChild(el);
+            });
+        } catch (err) {
+            resultsContainer.innerHTML = `<p style="color:var(--err);">Error: ${err}</p>`;
+        } finally {
+            isFetching = false;
+            if (btnFetch) btnFetch.disabled = false;
+        }
+    });
+
+    let isImporting = false;
+    btnImportSelected?.addEventListener("click", async () => {
+        if (isImporting) return;
+        if (selectedPlaylists.size === 0) return;
+        
+        isImporting = true;
+        btnImportSelected.disabled = true;
+        btnImportSelected.textContent = "Importing...";
+        const originalBg = btnImportSelected.style.background;
+        
+        try {
+            for (const pl of selectedPlaylists.values()) {
+                btnImportSelected.textContent = `Importing ${escapeHtml(pl.name)}...`;
+                
+                const jsonStr = await invoke("spotify_search", { query: pl.url });
+                const data = JSON.parse(jsonStr);
+                
+                if (data.type === "playlist" && data.tracks) {
+                    // Create local playlist
+                    const newPl = await createPlaylist(data.name || pl.name);
+                    
+                    // Add all tracks sequentially to avoid db locking issues
+                    const mappedSongs = data.tracks.map(mapSpotifyTrack);
+                    for (const song of mappedSongs) {
+                        await addTrackToPlaylist(newPl.id, song);
+                    }
+                }
+            }
+            renderPlaylistSidebar();
+            importModal.style.display = "none";
+        } catch (err) {
+            console.error("Failed to import playlists:", err);
+            btnImportSelected.textContent = "Error!";
+            btnImportSelected.style.background = "var(--err)";
+            setTimeout(() => {
+                btnImportSelected.style.background = originalBg;
+                updateImportSelectedBtn();
+            }, 3000);
+        } finally {
+            isImporting = false;
+        }
+    });
+}, 500);

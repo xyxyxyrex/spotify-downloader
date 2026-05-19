@@ -53,6 +53,17 @@ export function generateId() {
   return `pl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+export function getBestImage(meta) {
+  const allImages = [...(meta.album_images || []), ...(meta.track_images || [])];
+  for (let i = allImages.length - 1; i >= 0; i--) {
+    const url = allImages[i]?.url;
+    if (url && !url.includes("2a96cbd8b46e442fc41c2b86b821562f")) {
+      return url;
+    }
+  }
+  return null;
+}
+
 export function trackFromSong(song, order) {
   return {
     id: `tr_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
@@ -111,21 +122,58 @@ export async function toggleLikedSong(song) {
     await persistPlaylists();
     return false;
   }
-  pl.tracks.push(trackFromSong(song, pl.tracks.length));
+  
+  const track = trackFromSong(song, pl.tracks.length);
+  pl.tracks.push(track);
   await persistPlaylists();
+
+  if (song.duration == null && song.duration_secs == null) {
+    invoke("fetch_track_metadata", { artist: song.artist, track: song.title })
+      .then(async (meta) => {
+        if (meta) {
+          if (meta.duration_secs != null) track.duration_secs = meta.duration_secs;
+          if (meta.album) track.album = track.album || meta.album;
+          const bestImg = getBestImage(meta);
+          if (bestImg) track.image = bestImg;
+          await persistPlaylists();
+          window.dispatchEvent(new CustomEvent("playlist-updated", { detail: { playlistId: LIKED_SONGS_ID } }));
+        }
+      })
+      .catch((e) => {
+        console.error("Failed to fetch track metadata for liked songs:", e);
+      });
+  }
+
   return true;
 }
 
 export async function addTrackToPlaylist(playlistId, song) {
   const pl = getPlaylist(playlistId);
   if (!pl) return;
-  if (isLikedPlaylist(playlistId)) {
-    const key = songMatchKey(song);
-    if (pl.tracks.some((t) => songMatchKey(t) === key)) return;
-  }
-  const order = pl.tracks.length;
-  pl.tracks.push(trackFromSong(song, order));
+  
+  const key = songMatchKey(song);
+  if (pl.tracks.some((t) => songMatchKey(t) === key)) return;
+
+  const track = trackFromSong(song, pl.tracks.length);
+  pl.tracks.push(track);
   await persistPlaylists();
+
+  if (song.duration == null && song.duration_secs == null) {
+    invoke("fetch_track_metadata", { artist: song.artist, track: song.title })
+      .then(async (meta) => {
+        if (meta) {
+          if (meta.duration_secs != null) track.duration_secs = meta.duration_secs;
+          if (meta.album) track.album = track.album || meta.album;
+          const bestImg = getBestImage(meta);
+          if (bestImg) track.image = bestImg;
+          await persistPlaylists();
+          window.dispatchEvent(new CustomEvent("playlist-updated", { detail: { playlistId } }));
+        }
+      })
+      .catch((e) => {
+        console.error("Failed to fetch track metadata for playlist:", e);
+      });
+  }
 }
 
 export async function reorderPlaylistTracks(playlistId, fromIndex, toIndex) {

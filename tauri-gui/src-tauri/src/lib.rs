@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use dotenvy::dotenv;
 use std::env;
 use tauri::{Manager, State};
+use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
 const LASTFM_PLACEHOLDER: &str = "2a96cbd8b46e442fc41c2b86b821562f";
 
@@ -102,8 +103,20 @@ pub struct TrackMetadata {
     pub album_images: Vec<ArtImage>,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TrackHistory {
+    pub id: String,
+    pub title: String,
+    pub artist: String,
+    pub album: Option<String>,
+    pub image: Option<String>,
+    pub duration_secs: Option<u64>,
+    pub play_timestamps: Vec<u64>,
+}
+
 pub struct AppState {
     pub settings: Mutex<AppSettings>,
+    pub discord_rpc: Mutex<Option<DiscordIpcClient>>,
 }
 
 // ---------- Helpers ----------
@@ -114,6 +127,32 @@ fn settings_file() -> PathBuf {
     let _ = std::fs::create_dir_all(&path);
     path.push("settings.json");
     path
+}
+
+fn history_file() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("spotdl-gui");
+    let _ = std::fs::create_dir_all(&path);
+    path.push("history.json");
+    path
+}
+
+fn load_history() -> std::collections::HashMap<String, TrackHistory> {
+    let path = history_file();
+    if !path.exists() {
+        return std::collections::HashMap::new();
+    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_history(history: &std::collections::HashMap<String, TrackHistory>) -> Result<(), String> {
+    let path = history_file();
+    let data = serde_json::to_string_pretty(history).map_err(|e| format!("Failed to serialize history: {}", e))?;
+    std::fs::write(&path, data).map_err(|e| format!("Failed to write history: {}", e))?;
+    Ok(())
 }
 
 fn load_settings_from_disk() -> AppSettings {
@@ -303,12 +342,16 @@ fn spotify_env_from_settings(settings: &AppSettings) -> HashMap<String, String> 
         .spotify_client_id
         .clone()
         .filter(|s| !s.is_empty())
-        .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok());
+        .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
+        .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
+        .filter(|s| !s.is_empty());
     let secret = settings
         .spotify_client_secret
         .clone()
         .filter(|s| !s.is_empty())
-        .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok());
+        .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
+        .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
+        .filter(|s| !s.is_empty());
     if let Some(v) = id {
         map.insert("SPOTIFY_CLIENT_ID".to_string(), v);
     }
@@ -412,6 +455,7 @@ fn resolve_lastfm_api_key(settings: &AppSettings) -> Result<String, String> {
         .filter(|s| !s.is_empty())
         .cloned()
         .or_else(|| env::var("LASTFM_API_KEY").ok())
+        .or_else(|| option_env!("LASTFM_API_KEY").map(|s| s.to_string()))
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             "Last.fm API key not set. Add it in Settings or src-tauri/.env (LASTFM_API_KEY)."
@@ -427,6 +471,7 @@ fn spotify_is_configured(settings: &AppSettings) -> bool {
         .filter(|s| !s.is_empty())
         .cloned()
         .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
+        .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
         .filter(|s| !s.is_empty());
     let secret = settings
         .spotify_client_secret
@@ -434,6 +479,7 @@ fn spotify_is_configured(settings: &AppSettings) -> bool {
         .filter(|s| !s.is_empty())
         .cloned()
         .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
+        .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
         .filter(|s| !s.is_empty());
     id.is_some() && secret.is_some()
 }
@@ -608,6 +654,43 @@ fn get_api_status(state: State<AppState>) -> ApiStatus {
 }
 
 #[tauri::command]
+fn get_history() -> Result<std::collections::HashMap<String, TrackHistory>, String> {
+    Ok(load_history())
+}
+
+#[tauri::command]
+fn add_to_history(track: PlaylistTrack) -> Result<(), String> {
+    let mut history = load_history();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let entry = history.entry(track.id.clone()).or_insert_with(|| TrackHistory {
+        id: track.id,
+        title: track.title,
+        artist: track.artist,
+        album: track.album,
+        image: track.image,
+        duration_secs: track.duration_secs,
+        play_timestamps: Vec::new(),
+    });
+
+    entry.play_timestamps.push(now);
+    save_history(&history)
+}
+
+#[tauri::command]
+fn clear_history() -> Result<(), String> {
+    save_history(&std::collections::HashMap::new())
+}
+
+#[tauri::command]
+fn import_history(history: std::collections::HashMap<String, TrackHistory>) -> Result<(), String> {
+    save_history(&history)
+}
+
+#[tauri::command]
 fn set_settings(input: SetSettingsPayload, state: State<AppState>) -> Result<AppSettings, String> {
     let mut settings = effective_settings(&state);
     if let Some(dir) = input.cache_dir {
@@ -645,6 +728,30 @@ fn pick_folder(title: String) -> Result<Option<String>, String> {
         .set_title(&title)
         .pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
+}
+
+#[tauri::command]
+fn save_file_dialog(filename: String, content: String) -> Result<(), String> {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("JSON Files", &["json"])
+        .set_file_name(&filename)
+        .save_file()
+    {
+        std::fs::write(path, content).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn pick_json_file() -> Result<Option<String>, String> {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("JSON Files", &["json"])
+        .pick_file()
+    {
+        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        return Ok(Some(content));
+    }
+    Ok(None)
 }
 
 #[tauri::command]
@@ -980,6 +1087,88 @@ fn delete_downloaded_song(key: String, state: State<'_, AppState>) -> Result<(),
     }
 }
 
+#[tauri::command]
+fn delete_all_downloads(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let index = load_download_index(&settings);
+    let download_dir = resolve_download_dir(&settings);
+    for filename in index.values() {
+        let file_path = download_dir.join(filename);
+        if file_path.exists() {
+            let _ = std::fs::remove_file(file_path);
+        }
+    }
+    let _ = save_download_index(&settings, &std::collections::HashMap::new());
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct DependencyStatus {
+    python: bool,
+    yt_dlp: bool,
+    syncedlyrics: bool,
+    spotdl: bool,
+    python_version: String,
+}
+
+#[tauri::command]
+fn check_system_dependencies() -> DependencyStatus {
+    let mut status = DependencyStatus {
+        python: false,
+        yt_dlp: false,
+        syncedlyrics: false,
+        spotdl: false,
+        python_version: "Not found".to_string(),
+    };
+
+    // 1. Check Python and version
+    if let Ok(output) = std::process::Command::new("python").arg("--version").output() {
+        if output.status.success() {
+            status.python = true;
+            let ver_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            status.python_version = if ver_str.is_empty() {
+                String::from_utf8_lossy(&output.stderr).trim().to_string()
+            } else {
+                ver_str
+            };
+        }
+    }
+
+    // 2. Check yt-dlp module
+    if let Ok(output) = std::process::Command::new("python")
+        .arg("-m")
+        .arg("yt_dlp")
+        .arg("--version")
+        .output()
+    {
+        status.yt_dlp = output.status.success();
+    }
+
+    // 3. Check syncedlyrics module
+    if let Ok(output) = std::process::Command::new("python")
+        .arg("-c")
+        .arg("import syncedlyrics")
+        .output()
+    {
+        status.syncedlyrics = output.status.success();
+    }
+
+    // 4. Check spotdl module
+    // We also consider it found if we have a spotdl directory locally
+    let local_spotdl = std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
+    if local_spotdl {
+        status.spotdl = true;
+    } else if let Ok(output) = std::process::Command::new("python")
+        .arg("-c")
+        .arg("import spotdl")
+        .output()
+    {
+        status.spotdl = output.status.success();
+    }
+
+    status
+}
+
 fn get_dir_size(path: &std::path::Path) -> std::io::Result<u64> {
     let mut size = 0;
     if path.is_dir() {
@@ -1217,11 +1406,88 @@ fn start_stream_server() {
     });
 }
 
+// ---------- Discord Rich Presence ----------
+
+/// Discord Application ID — create one at https://discord.com/developers/applications
+const DISCORD_APP_ID: &str = "1506321943635427329";
+
+fn init_discord_rpc() -> Option<DiscordIpcClient> {
+    let mut client = DiscordIpcClient::new(DISCORD_APP_ID).ok()?;
+    if client.connect().is_ok() {
+        // Set initial idle presence
+        let _ = client.set_activity(
+            activity::Activity::new()
+                .state("Idle")
+                .details("Browsing music")
+                .activity_type(activity::ActivityType::Listening)
+                .assets(
+                    activity::Assets::new()
+                        .large_image("app_icon")
+                        .large_text("SpotDL Desktop"),
+                ),
+        );
+        Some(client)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DiscordPresencePayload {
+    title: String,
+    artist: String,
+    album: Option<String>,
+    image_url: Option<String>,
+    #[serde(default)]
+    paused: bool,
+}
+
+#[tauri::command]
+fn discord_update_presence(payload: DiscordPresencePayload, state: State<AppState>) -> Result<(), String> {
+    let mut guard = state.discord_rpc.lock().unwrap();
+    if guard.is_none() {
+        // Try to connect if not already
+        *guard = init_discord_rpc();
+    }
+    if let Some(client) = guard.as_mut() {
+        let details = payload.title.clone();
+        let state_text = format!("by {}", payload.artist);
+
+        let large_img = payload.image_url.as_deref().unwrap_or("app_icon");
+
+        let act = activity::Activity::new()
+            .details(&details)
+            .state(&state_text)
+            .activity_type(activity::ActivityType::Listening)
+            .assets(
+                activity::Assets::new()
+                    .large_image(large_img)
+                    .large_text(&payload.title)
+                    .small_image("app_icon")
+                    .small_text(if payload.paused { "Paused" } else { "Playing" }),
+            );
+
+        client.set_activity(act).map_err(|e| format!("Discord RPC: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn discord_clear_presence(state: State<AppState>) -> Result<(), String> {
+    let mut guard = state.discord_rpc.lock().unwrap();
+    if let Some(client) = guard.as_mut() {
+        let _ = client.clear_activity();
+    }
+    Ok(())
+}
+
 // ---------- App Entry ----------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings = load_settings_from_disk();
+    let discord = init_discord_rpc();
 
     tauri::Builder::default()
         .setup(|_app| {
@@ -1231,6 +1497,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             settings: Mutex::new(settings),
+            discord_rpc: Mutex::new(discord),
         })
         .invoke_handler(tauri::generate_handler![
             download_song,
@@ -1251,6 +1518,8 @@ pub fn run() {
             get_downloaded_keys,
             get_download_index,
             delete_downloaded_song,
+            delete_all_downloads,
+            check_system_dependencies,
             get_cache_size,
             clear_cache,
             get_cache_path,
@@ -1259,10 +1528,18 @@ pub fn run() {
             get_api_status,
             set_settings,
             pick_folder,
+            save_file_dialog,
+            pick_json_file,
             read_audio_file,
             read_file_bytes,
             load_playlists,
             save_playlists,
+            discord_update_presence,
+            discord_clear_presence,
+            get_history,
+            add_to_history,
+            clear_history,
+            import_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

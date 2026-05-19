@@ -280,6 +280,123 @@ def _search_spotify_catalog(spotify, query: str) -> dict:
     return _finalize_search_results(query, tracks, albums, artists)
 
 
+def _get_direct_spotify_token() -> str:
+    import base64
+    import urllib.request
+    import urllib.parse
+    import urllib.error
+
+    client_id = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise ValueError("Spotify Client ID and Secret are required to fetch user playlists.")
+
+    auth_str = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+    token_req = urllib.request.Request(
+        "https://accounts.spotify.com/api/token",
+        data=urllib.parse.urlencode({"grant_type": "client_credentials"}).encode(),
+        headers={
+            "Authorization": f"Basic {auth_str}",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(token_req) as resp:
+        token_data = json.loads(resp.read())
+    return token_data["access_token"]
+
+
+def _fetch_user_playlists_direct(user_id: str) -> dict:
+    """Fetch a user's public playlists using client credentials (no user login)."""
+    import urllib.request
+    import urllib.parse
+
+    access_token = _get_direct_spotify_token()
+
+    # Fetch user playlists
+    api_url = f"https://api.spotify.com/v1/users/{urllib.parse.quote(user_id)}/playlists?limit=50"
+    api_req = urllib.request.Request(
+        api_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    with urllib.request.urlopen(api_req) as resp:
+        playlists_data = json.loads(resp.read())
+
+    items = playlists_data.get("items", [])
+    return {
+        "type": "user_playlists",
+        "playlists": [
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "url": p["external_urls"]["spotify"],
+                "image": p["images"][0]["url"] if p.get("images") else "",
+                "tracks_total": p["tracks"]["total"] if "tracks" in p else 0,
+                "owner": (p["owner"].get("display_name") or p["owner"]["id"]),
+            }
+            for p in items
+            if p and p.get("public") is not False
+        ],
+    }
+
+
+def _fetch_playlist_direct(playlist_id: str) -> dict:
+    """Fetch playlist metadata and all tracks using direct Spotify Web API."""
+    import urllib.request
+    import urllib.parse
+
+    access_token = _get_direct_spotify_token()
+
+    # Fetch playlist metadata
+    meta_url = f"https://api.spotify.com/v1/playlists/{urllib.parse.quote(playlist_id)}"
+    meta_req = urllib.request.Request(
+        meta_url,
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    with urllib.request.urlopen(meta_req) as resp:
+        meta_data = json.loads(resp.read())
+
+    # Paginate through tracks
+    all_tracks = []
+    next_url = meta_data["tracks"]["href"]
+    
+    while next_url and len(all_tracks) < 1500:  # Safety limit
+        req = urllib.request.Request(
+            next_url, headers={"Authorization": f"Bearer {access_token}"}
+        )
+        with urllib.request.urlopen(req) as resp:
+            page = json.loads(resp.read())
+        
+        for item in page.get("items", []):
+            t = item.get("track")
+            if not t or not t.get("id"):
+                continue
+            
+            artist_name = t["artists"][0]["name"] if t.get("artists") else "Unknown Artist"
+            album_name = t.get("album", {}).get("name", "Unknown Album")
+            album_art = ""
+            if t.get("album", {}).get("images"):
+                album_art = t["album"]["images"][0]["url"]
+                
+            all_tracks.append({
+                "url": t.get("external_urls", {}).get("spotify", f"https://open.spotify.com/track/{t['id']}"),
+                "title": t["name"],
+                "artist": artist_name,
+                "album": album_name,
+                "album_art": album_art,
+                "duration": t.get("duration_ms", 0) / 1000.0,
+            })
+            
+        next_url = page.get("next")
+
+    return {
+        "type": "playlist",
+        "url": meta_data.get("external_urls", {}).get("spotify", f"https://open.spotify.com/playlist/{playlist_id}"),
+        "name": meta_data["name"],
+        "author": meta_data.get("owner", {}).get("display_name") or meta_data.get("owner", {}).get("id") or "",
+        "tracks": all_tracks,
+    }
+
+
 def init_spotify() -> None:
     from spotdl.utils.spotify import SpotifyClient
 
@@ -312,8 +429,8 @@ def resolve_query(query: str) -> dict:
     # Spotify URL
     if "open.spotify.com" in q or "spotify.link" in q or q.startswith("spotify:"):
         if "playlist" in q:
-            pl = Playlist.from_url(q, fetch_songs=True)
-            return playlist_result(pl)
+            playlist_id = q.split("playlist/")[-1].split("?")[0].split(":")[-1] if "playlist/" in q else q.split(":")[-1]
+            return _fetch_playlist_direct(playlist_id)
         if "album" in q:
             alb = Album.from_url(q, fetch_songs=True)
             return album_result(alb)
@@ -331,15 +448,20 @@ def resolve_query(query: str) -> dict:
 
     # spotDL search prefixes
     if q.startswith("playlist:"):
-        pl = Playlist.from_search_term(q, fetch_songs=True)
-        return playlist_result(pl)
+        playlist_id = q.split("playlist:")[-1].strip()
+        return _fetch_playlist_direct(playlist_id)
     if q.startswith("album:"):
         alb = Album.from_search_term(q, fetch_songs=True)
         return album_result(alb)
 
     from spotdl.utils.spotify import SpotifyClient
-
     spotify = SpotifyClient()
+
+    # User profile fetching for public playlists (direct API, no user auth needed)
+    if q.startswith("user:") or "/user/" in q:
+        user_id = q.split("user:")[-1].strip() if "user:" in q else q.split("/user/")[-1].split("?")[0].split("/")[0].strip()
+        return _fetch_user_playlists_direct(user_id)
+
     return _search_spotify_catalog(spotify, q)
 
 
@@ -348,8 +470,14 @@ def main() -> None:
         print(json.dumps({"error": "Usage: spotify_query.py <query>"}))
         sys.exit(1)
     try:
-        init_spotify()
-        out = resolve_query(sys.argv[1])
+        q = sys.argv[1].strip()
+        # For user: queries, skip spotDL entirely and use direct API
+        if q.startswith("user:") or "/user/" in q:
+            user_id = q.split("user:")[-1].strip() if "user:" in q else q.split("/user/")[-1].split("?")[0].split("/")[0].strip()
+            out = _fetch_user_playlists_direct(user_id)
+        else:
+            init_spotify()
+            out = resolve_query(q)
         print(json.dumps(out))
     except Exception as exc:
         print(json.dumps({"error": str(exc)}))

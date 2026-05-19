@@ -31,3 +31,4 @@ urlencoding = "2"
 axum = "0.8.9"
 tower-http = { version = "0.6.11", features = ["cors", "fs"] }
 tokio-util = { version = "0.7.18", features = ["io"] }
+discord-rich-presence = "0.2"

@@ -54,6 +54,7 @@
                     <h3>Playlists</h3>
                     <ul id="playlist-list"></ul>
                     <button id="new-playlist-btn">+ New Playlist</button>
+                    <button id="import-spotify-btn">⤓ Import Spotify</button>
                 </div>
                 <div class="sidebar-footer">
                     <button
@@ -173,7 +174,7 @@
                     </div>
 
                     <div id="view-playlist" class="view hidden">
-                        <div class="playlist-view-header">
+                        <div class="playlist-view-header" style="display: flex; align-items: center; gap: 1rem;">
                             <button
                                 type="button"
                                 id="playlist-back-btn"
@@ -181,13 +182,17 @@
                             >
                                 &lt; Back
                             </button>
-                            <div>
-                                <h2 id="playlist-view-title">> Playlist</h2>
+                            <div style="flex: 1;">
+                                <h2 id="playlist-view-title" style="margin: 0;">> Playlist</h2>
                                 <p
                                     id="playlist-view-meta"
                                     class="collection-subtitle"
+                                    style="margin: 0;"
                                 ></p>
                             </div>
+                            <button type="button" id="playlist-rescan-btn" class="btn-secondary">
+                                Rescan metadata
+                            </button>
                         </div>
                         <div class="playlist-table-wrap">
                             <table
@@ -234,10 +239,7 @@
                             <h3 class="browse-section-title">
                                 &gt; Popular tracks
                             </h3>
-                            <div
-                                id="artist-top-tracks"
-                                class="song-list"
-                            ></div>
+                            <div id="artist-top-tracks" class="song-list"></div>
                         </section>
                         <section class="browse-section">
                             <h3 class="browse-section-title">&gt; Albums</h3>
@@ -305,47 +307,97 @@
                                     </button>
                                 </div>
                             </div>
-                            <div class="settings-row">
-                                <label for="spotify-id-input">
-                                    Spotify Client ID
-                                    <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer" class="settings-tooltip" title="Open Spotify Developer Dashboard">[?]</a>
-                                </label>
-                                <div class="settings-input-group">
-                                    <input
-                                        type="text"
-                                        id="spotify-id-input"
-                                        placeholder="From Spotify Developer Dashboard"
-                                        autocomplete="off"
-                                    />
+                            <!-- Developer Credentials inputs (Optional fallback if default keys are rate-limited) -->
+                            <div class="settings-row" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+                                <h3 style="margin-bottom: 0.5rem; color: var(--fg); font-size: 1.1rem;">Custom API Credentials (Optional Fallback)</h3>
+                                <p class="settings-hint" style="margin-bottom: 1.2rem;">
+                                    If the built-in default keys ever hit rate-limits or fail, you can generate and input your own developer credentials below to bypass the shared limits.
+                                </p>
+                                
+                                <div class="settings-row">
+                                    <label for="spotify-id-input">
+                                        Spotify Client ID
+                                        <a
+                                            href="https://developer.spotify.com/dashboard"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="settings-tooltip"
+                                            title="Open Spotify Developer Dashboard"
+                                            >[?]</a
+                                        >
+                                    </label>
+                                    <div class="settings-input-group">
+                                        <input
+                                            type="text"
+                                            id="spotify-id-input"
+                                            placeholder="From Spotify Developer Dashboard"
+                                            autocomplete="off"
+                                        />
+                                    </div>
+                                    <p class="settings-hint">
+                                        Needed for Spotify URL searches and importing public playlists. 
+                                        <a
+                                            href="https://developer.spotify.com/dashboard"
+                                            target="_blank"
+                                            rel="noopener"
+                                            >Get Spotify Client ID & Secret</a
+                                        >
+                                    </p>
                                 </div>
-                                <p class="settings-hint">Playlists &amp; Spotify URLs need both ID and Secret. <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener">developer.spotify.com/dashboard</a></p>
-                            </div>
-                            <div class="settings-row">
-                                <label for="spotify-secret-input">
-                                    Spotify Client Secret
-                                    <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer" class="settings-tooltip" title="Client Secret from your Spotify app">[?]</a>
-                                </label>
-                                <div class="settings-input-group">
-                                    <input
-                                        type="password"
-                                        id="spotify-secret-input"
-                                        placeholder="Keep secret — stored locally"
-                                        autocomplete="off"
-                                    />
+                                <div class="settings-row">
+                                    <label for="spotify-secret-input">
+                                        Spotify Client Secret
+                                        <a
+                                            href="https://developer.spotify.com/dashboard"
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            class="settings-tooltip"
+                                            title="Client Secret from your Spotify app"
+                                            >[?]</a
+                                        >
+                                    </label>
+                                    <div class="settings-input-group">
+                                        <input
+                                            type="password"
+                                            id="spotify-secret-input"
+                                            placeholder="Keep secret — stored locally"
+                                            autocomplete="off"
+                                        />
+                                    </div>
+                                </div>
+                                <div class="settings-row" style="margin-top: 1.5rem;">
+                                    <label for="lastfm-api-key-input"
+                                        >Last.fm API Key</label
+                                    >
+                                    <div class="settings-input-group">
+                                        <input
+                                            type="text"
+                                            id="lastfm-api-key-input"
+                                            placeholder="From Last.fm developer account"
+                                            autocomplete="off"
+                                        />
+                                    </div>
+                                    <p class="settings-hint">
+                                        Used for retrieving bio details, search results, and album art fallback.
+                                        <a
+                                            href="https://www.last.fm/api/account/create"
+                                            target="_blank"
+                                            rel="noopener"
+                                            >Get a Last.fm API Key</a
+                                        >
+                                    </p>
                                 </div>
                             </div>
-                            <div class="settings-row">
-                                <label for="lastfm-api-key-input">Last.fm API Key</label>
-                                <div class="settings-input-group">
-                                    <input type="text" id="lastfm-api-key-input" placeholder="Or LASTFM_API_KEY in .env" autocomplete="off" />
-                                </div>
-                                <p class="settings-hint">Charts &amp; search fallback when Spotify is not set. <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener">Get a Last.fm key</a></p>
-                            </div>
-                            <p id="api-status-hint" class="settings-hint api-status-hint"></p>
+                            <p
+                                id="api-status-hint"
+                                class="settings-hint api-status-hint"
+                            ></p>
                             <p class="settings-hint">
                                 Keys are saved to your profile (e.g. Windows:
-                                <code>%APPDATA%\spotdl-gui\settings.json</code>) — the same file is used for
-                                <code>npm run tauri dev</code> and packaged builds. Click
+                                <code>%APPDATA%\spotdl-gui\settings.json</code>)
+                                — the same file is used for
+                                <code>npm run tauri dev</code> and packaged
+                                builds. Click
                                 <strong>Save settings</strong> after editing.
                             </p>
                             <div class="settings-row">
@@ -368,6 +420,61 @@
                                     </button>
                                 </div>
                             </div>
+                            
+                            <div class="settings-row" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+                                <h3 style="margin-bottom: 0.5rem; color: var(--fg); font-size: 1.1rem;">System Dependency Checker</h3>
+                                <p class="settings-hint" style="margin-bottom: 1.2rem;">Verify that your computer has the necessary tools installed for streaming and downloading music.</p>
+                                <div id="dependency-checker-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px;">
+                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="text-align: left;">
+                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">Python 3</span>
+                                            <span id="dep-status-python-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
+                                        </div>
+                                        <span id="dep-status-python-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
+                                    </div>
+                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="text-align: left;">
+                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">yt-dlp (Stream & Download)</span>
+                                            <span id="dep-status-ytdlp-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
+                                        </div>
+                                        <span id="dep-status-ytdlp-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
+                                    </div>
+                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="text-align: left;">
+                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">spotDL Core</span>
+                                            <span id="dep-status-spotdl-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
+                                        </div>
+                                        <span id="dep-status-spotdl-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
+                                    </div>
+                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+                                        <div style="text-align: left;">
+                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">syncedlyrics</span>
+                                            <span id="dep-status-lyrics-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
+                                        </div>
+                                        <span id="dep-status-lyrics-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 10px; align-items: center;">
+                                    <button type="button" class="btn-secondary" id="btn-recheck-dependencies" style="padding: 6px 12px; font-size: 0.85rem;">Check Status</button>
+                                    <p id="dependency-tip" style="margin: 0; font-size: 0.82rem; color: var(--fg-muted); text-align: left;"></p>
+                                </div>
+                            </div>
+
+                            <div class="settings-row" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
+                                <h3 style="margin-bottom: 1rem; color: var(--fg); font-size: 1.1rem;">Themes</h3>
+                                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                                    <select id="theme-select" style="flex: 1; padding: 10px; background: var(--bg-hover); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-size: 0.9rem; cursor: pointer;">
+                                        <option value="default">Default Dark</option>
+                                        <option value="light">Light Mode</option>
+                                        <option value="catppuccin-mocha">Catppuccin Mocha</option>
+                                        <option value="dracula">Dracula</option>
+                                    </select>
+                                    <button type="button" class="btn-secondary" id="btn-import-css">Import .css</button>
+                                    <input type="file" id="css-file-input" accept=".css" style="display: none;" />
+                                </div>
+                                <p class="settings-hint">Or, you can input your own css code here!</p>
+                                <textarea id="custom-css-input" style="width: 100%; height: 150px; padding: 10px; background: var(--bg-hover); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font-family: monospace; font-size: 0.85rem; resize: vertical; box-sizing: border-box;" placeholder="/* Add custom CSS variables or rules here */"></textarea>
+                            </div>
                             <div class="settings-actions">
                                 <button type="button" id="btn-save-settings">
                                     Save settings
@@ -378,6 +485,22 @@
                                     class="btn-secondary"
                                 >
                                     Reset to defaults
+                                </button>
+                            </div>
+                            <div class="settings-actions" style="margin-top: 10px;">
+                                <button
+                                    type="button"
+                                    id="btn-export-settings"
+                                    class="btn-secondary"
+                                >
+                                    Export configs
+                                </button>
+                                <button
+                                    type="button"
+                                    id="btn-import-settings"
+                                    class="btn-secondary"
+                                >
+                                    Import configs
                                 </button>
                             </div>
                             <p id="settings-status" class="settings-status"></p>
@@ -412,11 +535,47 @@
                                 </div>
                             </section>
 
+                            <section
+                                id="downloads-active-card"
+                                class="downloads-active-card hidden"
+                            >
+                                <div class="downloads-active-header">
+                                    <div>
+                                        <h3 class="downloads-section-title">
+                                            Downloading now
+                                        </h3>
+                                        <p
+                                            id="downloads-active-subtitle"
+                                            class="downloads-active-subtitle"
+                                        >
+                                            No active downloads
+                                        </p>
+                                    </div>
+                                    <div
+                                        id="downloads-active-pill"
+                                        class="downloads-active-pill"
+                                    >
+                                        0
+                                    </div>
+                                </div>
+                                <div
+                                    id="downloads-active-list"
+                                    class="downloads-active-list"
+                                ></div>
+                            </section>
+
                             <section class="downloads-library-section">
                                 <div class="downloads-library-header">
                                     <h3 class="downloads-section-title">
                                         Saved Library
                                     </h3>
+                                    <button
+                                        type="button"
+                                        id="btn-delete-all-downloads"
+                                        class="btn-secondary btn-danger-outline"
+                                    >
+                                        Delete all Downloads
+                                    </button>
                                     <input
                                         type="text"
                                         id="downloads-search"
@@ -435,12 +594,8 @@
                                     >
                                         <thead>
                                             <tr>
-                                                <th class="col-title">
-                                                    Track
-                                                </th>
-                                                <th class="col-album">
-                                                    File
-                                                </th>
+                                                <th class="col-title">Track</th>
+                                                <th class="col-album">File</th>
                                                 <th class="col-actions"></th>
                                             </tr>
                                         </thead>
@@ -516,9 +671,7 @@
                     </button>
                     <div id="detail-sidebar-inner">
                         <div id="detail-empty" class="detail-empty">
-                            <p>
-                                Select a track to view details and lyrics.
-                            </p>
+                            <p>Select a track to view details and lyrics.</p>
                         </div>
                         <div id="detail-content" class="hidden">
                             <div id="detail-art-wrap" class="detail-art-wrap">
@@ -700,7 +853,13 @@
                     <li id="cm-queue">Add to queue</li>
                     <li id="cm-liked">Add to Liked Songs</li>
                     <li id="cm-playlist">Add to playlist</li>
+                    <li id="cm-remove-from-playlist" class="hidden">
+                        Remove from this playlist
+                    </li>
                     <li id="cm-download">Download</li>
+                    <li id="cm-download-group" class="hidden">
+                        Download Group
+                    </li>
                     <li id="cm-artist">View Artist</li>
                 </ul>
             </div>
@@ -718,6 +877,24 @@
                             Confirm
                         </button>
                     </div>
+                </div>
+            </div>
+        </div>
+        <div id="spotify-import-modal" class="modal">
+            <div class="modal-content">
+                <h2>Import Spotify Playlists</h2>
+                <p style="margin-top: 0.5rem; color: #a0a0a0; font-size: 0.9rem;">
+                    Paste your Spotify Profile Link or username to fetch your public playlists.
+                </p>
+                <div class="settings-input-group" style="margin-top: 1rem;">
+                    <input type="text" id="spotify-import-input" placeholder="e.g. https://open.spotify.com/user/123..." autocomplete="off" />
+                </div>
+                <div id="spotify-import-results" style="margin-top: 1rem; max-height: 400px; overflow-y: auto; display: grid; gap: 0.5rem;">
+                </div>
+                <div class="modal-actions" style="margin-top: 1rem;">
+                    <button id="btn-cancel-import" class="btn-secondary">Cancel</button>
+                    <button id="btn-fetch-import" class="btn-primary">Fetch Playlists</button>
+                    <button id="btn-import-selected" class="btn-primary hidden" disabled>Import Selected</button>
                 </div>
             </div>
         </div>
