@@ -5,12 +5,13 @@ import sys
 from pathlib import Path
 
 import requests
-from mutagen.id3 import APIC, ID3, TALB, TCON, TIT2, TPE1, COMM
+from mutagen.id3 import APIC, TALB, TCON, TIT2, TPE1, COMM
 from mutagen.mp3 import MP3
 
 
 def embed(path: str, meta: dict) -> None:
-    audio = MP3(path, ID3=ID3)
+    path = str(Path(path).resolve())
+    audio = MP3(path)
     if audio.tags is None:
         audio.add_tags()
 
@@ -66,7 +67,6 @@ def embed(path: str, meta: dict) -> None:
         except Exception:
             pass
 
-    tags.save()
     audio.save()
 
 

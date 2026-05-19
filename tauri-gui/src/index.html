@@ -13,7 +13,7 @@
                 <span class="titlebar-brand">[ spot-dl ]</span>
                 <span class="titlebar-title">SpotDL GUI</span>
             </div>
-            <div class="titlebar-actions">
+            <div class="titlebar-actions" data-tauri-drag-region="false">
                 <button
                     type="button"
                     id="titlebar-min"
@@ -49,14 +49,27 @@
                 <nav>
                     <a href="#" id="nav-home" class="active">Home</a>
                     <a href="#" id="nav-search">Search</a>
-                    <a href="#" id="nav-queue">Queue</a>
-                    <a href="#" id="nav-settings">Settings</a>
-                    <a href="#" id="nav-downloads">Downloads</a>
                 </nav>
                 <div class="playlists-section">
                     <h3>Playlists</h3>
                     <ul id="playlist-list"></ul>
                     <button id="new-playlist-btn">+ New Playlist</button>
+                </div>
+                <div class="sidebar-footer">
+                    <button
+                        type="button"
+                        id="nav-settings"
+                        class="sidebar-footer-btn"
+                    >
+                        Settings
+                    </button>
+                    <button
+                        type="button"
+                        id="nav-downloads"
+                        class="sidebar-footer-btn"
+                    >
+                        Downloads
+                    </button>
                 </div>
             </aside>
 
@@ -66,13 +79,25 @@
                         <input
                             type="text"
                             id="search-input"
-                            placeholder="Search tracks, playlists, or paste a Spotify URL..."
+                            placeholder="Search artists, albums, tracks, or paste a Spotify URL..."
                             autocomplete="off"
                         />
                     </header>
 
                     <div id="view-home" class="view">
                         <div id="home-browse">
+                            <p
+                                id="home-lastfm-hint"
+                                class="home-lastfm-hint hidden"
+                                role="status"
+                            ></p>
+                            <section class="home-section">
+                                <h2>> Your playlists</h2>
+                                <div
+                                    id="home-row-playlists"
+                                    class="collection-row home-playlists-row"
+                                ></div>
+                            </section>
                             <section class="home-section">
                                 <h2>> Top Charts</h2>
                                 <div
@@ -81,14 +106,14 @@
                                 ></div>
                             </section>
                             <section class="home-section">
-                                <h2>> Popular Tracks</h2>
+                                <h2>> Genres &amp; tag charts</h2>
                                 <div
                                     id="home-row-tracks"
                                     class="collection-row"
                                 ></div>
                             </section>
                             <section class="home-section">
-                                <h2>> Popular Albums</h2>
+                                <h2>> Album charts</h2>
                                 <div
                                     id="home-row-albums"
                                     class="collection-row"
@@ -184,6 +209,79 @@
                         </div>
                     </div>
 
+                    <div id="view-artist" class="view hidden">
+                        <button
+                            type="button"
+                            id="artist-back-btn"
+                            class="home-back-btn"
+                        >
+                            &lt; Back
+                        </button>
+                        <header class="entity-hero artist-hero">
+                            <div
+                                id="artist-hero-art"
+                                class="entity-hero-art"
+                            ></div>
+                            <div class="entity-hero-info">
+                                <h2 id="artist-page-name"></h2>
+                                <p
+                                    id="artist-page-meta"
+                                    class="collection-subtitle"
+                                ></p>
+                            </div>
+                        </header>
+                        <section class="browse-section">
+                            <h3 class="browse-section-title">
+                                &gt; Popular tracks
+                            </h3>
+                            <div
+                                id="artist-top-tracks"
+                                class="song-list"
+                            ></div>
+                        </section>
+                        <section class="browse-section">
+                            <h3 class="browse-section-title">&gt; Albums</h3>
+                            <div
+                                id="artist-albums-grid"
+                                class="song-grid entity-albums-grid"
+                            ></div>
+                        </section>
+                    </div>
+
+                    <div id="view-album" class="view hidden">
+                        <button
+                            type="button"
+                            id="album-back-btn"
+                            class="home-back-btn"
+                        >
+                            &lt; Back
+                        </button>
+                        <header class="entity-hero album-hero">
+                            <div
+                                id="album-hero-art"
+                                class="entity-hero-art"
+                            ></div>
+                            <div class="entity-hero-info">
+                                <h2 id="album-page-title"></h2>
+                                <p
+                                    id="album-page-artist"
+                                    class="collection-subtitle"
+                                ></p>
+                                <p
+                                    id="album-page-meta"
+                                    class="collection-subtitle"
+                                ></p>
+                            </div>
+                        </header>
+                        <section class="browse-section">
+                            <h3 class="browse-section-title">&gt; Tracks</h3>
+                            <div
+                                id="album-tracks-container"
+                                class="song-grid"
+                            ></div>
+                        </section>
+                    </div>
+
                     <div id="view-settings" class="view hidden">
                         <h2>> Settings</h2>
                         <div class="settings-panel">
@@ -244,6 +342,12 @@
                                 <p class="settings-hint">Charts &amp; search fallback when Spotify is not set. <a href="https://www.last.fm/api/account/create" target="_blank" rel="noopener">Get a Last.fm key</a></p>
                             </div>
                             <p id="api-status-hint" class="settings-hint api-status-hint"></p>
+                            <p class="settings-hint">
+                                Keys are saved to your profile (e.g. Windows:
+                                <code>%APPDATA%\spotdl-gui\settings.json</code>) — the same file is used for
+                                <code>npm run tauri dev</code> and packaged builds. Click
+                                <strong>Save settings</strong> after editing.
+                            </p>
                             <div class="settings-row">
                                 <label for="download-dir-input"
                                     >Downloads location</label
@@ -282,66 +386,70 @@
 
                     <div id="view-downloads" class="view hidden">
                         <h2>> Downloads</h2>
-                        <div class="settings-panel">
-                            <div
-                                class="settings-row"
-                                style="
-                                    flex-direction: column;
-                                    align-items: flex-start;
-                                "
-                            >
-                                <h3>Cache Management</h3>
-                                <p id="cache-usage-text">
+                        <div class="downloads-panel">
+                            <section class="downloads-cache-card">
+                                <h3 class="downloads-section-title">
+                                    Cache Management
+                                </h3>
+                                <p
+                                    id="cache-usage-text"
+                                    class="downloads-cache-stat"
+                                >
                                     Calculating cache size...
                                 </p>
-                                <div
-                                    class="settings-actions"
-                                    style="margin-top: 10px"
-                                >
+                                <p class="settings-hint">
+                                    Stream cache speeds up replay. Clearing it
+                                    does not remove saved downloads.
+                                </p>
+                                <div class="settings-actions downloads-actions">
                                     <button
                                         type="button"
                                         id="btn-clear-cache"
-                                        class="btn-secondary"
+                                        class="btn-secondary btn-danger-outline"
                                     >
-                                        Clear Cache
+                                        Clear cache
                                     </button>
                                 </div>
-                            </div>
+                            </section>
 
-                            <div
-                                style="
-                                    margin-bottom: 12px;
-                                    margin-top: 30px;
-                                    display: flex;
-                                    justify-content: space-between;
-                                    align-items: center;
-                                "
-                            >
-                                <h3>Saved Library</h3>
-                                <input
-                                    type="text"
-                                    id="downloads-search"
-                                    placeholder="Search downloads..."
-                                    class="search-input"
-                                    style="width: 200px"
-                                />
-                            </div>
+                            <section class="downloads-library-section">
+                                <div class="downloads-library-header">
+                                    <h3 class="downloads-section-title">
+                                        Saved Library
+                                    </h3>
+                                    <input
+                                        type="text"
+                                        id="downloads-search"
+                                        class="downloads-search-input"
+                                        placeholder="Search downloads..."
+                                        autocomplete="off"
+                                    />
+                                </div>
 
-                            <div class="playlist-table-wrap">
-                                <table
-                                    class="playlist-table"
-                                    id="downloads-tracks-table"
+                                <div
+                                    class="playlist-table-wrap downloads-table-wrap"
                                 >
-                                    <thead>
-                                        <tr>
-                                            <th class="col-title">Title</th>
-                                            <th class="col-album">Album</th>
-                                            <th class="col-actions"></th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="downloads-tracks-body"></tbody>
-                                </table>
-                            </div>
+                                    <table
+                                        class="playlist-table downloads-table"
+                                        id="downloads-tracks-table"
+                                    >
+                                        <thead>
+                                            <tr>
+                                                <th class="col-title">
+                                                    Track
+                                                </th>
+                                                <th class="col-album">
+                                                    File
+                                                </th>
+                                                <th class="col-actions"></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody
+                                            id="downloads-tracks-body"
+                                        ></tbody>
+                                    </table>
+                                </div>
+                            </section>
                         </div>
                     </div>
 
@@ -409,7 +517,7 @@
                     <div id="detail-sidebar-inner">
                         <div id="detail-empty" class="detail-empty">
                             <p>
-                                Select a track to view metadata and album art.
+                                Select a track to view details and lyrics.
                             </p>
                         </div>
                         <div id="detail-content" class="hidden">
@@ -430,23 +538,28 @@
                                 </p>
                             </div>
 
-                            <div
-                                id="detail-art-gallery"
-                                class="detail-art-gallery hidden"
+                            <section
+                                id="detail-lyrics-section"
+                                class="detail-lyrics-section"
                             >
-                                <h4>Album art</h4>
-                                <div
-                                    id="detail-art-thumbs"
-                                    class="detail-art-thumbs"
-                                ></div>
-                            </div>
+                                <h4>Lyrics</h4>
+                                <pre
+                                    id="detail-lyrics"
+                                    class="detail-lyrics"
+                                    aria-live="polite"
+                                ></pre>
+                            </section>
                         </div>
                     </div>
                 </aside>
             </div>
 
             <footer id="player-controls">
-                <div class="now-playing">
+                <div
+                    class="now-playing now-playing-contextable"
+                    id="now-playing"
+                    title="Right-click for track options"
+                >
                     <div class="np-art-wrap">
                         <div id="np-art" class="np-art-container"></div>
                         <span
@@ -460,9 +573,32 @@
                         <div id="np-title">No track selected</div>
                         <div id="np-artist">-</div>
                     </div>
+                    <button
+                        type="button"
+                        id="np-like-btn"
+                        class="np-like-btn"
+                        title="Save to Liked Songs"
+                        aria-label="Like track"
+                        disabled
+                    >
+                        ♡
+                    </button>
+                    <span class="np-context-hint" aria-hidden="true"
+                        >right-click</span
+                    >
                 </div>
                 <div class="controls-center">
                     <div class="transport-buttons">
+                        <button
+                            type="button"
+                            id="btn-shuffle"
+                            class="transport-btn transport-btn-toggle"
+                            title="Shuffle off"
+                            aria-label="Shuffle"
+                            aria-pressed="false"
+                        >
+                            ⤮
+                        </button>
                         <button
                             type="button"
                             id="btn-prev"
@@ -484,8 +620,20 @@
                             id="btn-next"
                             class="transport-btn"
                             title="Next"
+                            aria-label="Next track"
                         >
                             &gt;|
+                        </button>
+                        <button
+                            type="button"
+                            id="btn-loop"
+                            class="transport-btn transport-btn-toggle"
+                            title="Repeat off"
+                            aria-label="Repeat"
+                            aria-pressed="false"
+                            data-loop-mode="off"
+                        >
+                            ↻
                         </button>
                     </div>
                     <div class="progress-container">
@@ -550,6 +698,7 @@
             <div id="context-menu" class="hidden">
                 <ul>
                     <li id="cm-queue">Add to queue</li>
+                    <li id="cm-liked">Add to Liked Songs</li>
                     <li id="cm-playlist">Add to playlist</li>
                     <li id="cm-download">Download</li>
                     <li id="cm-artist">View Artist</li>

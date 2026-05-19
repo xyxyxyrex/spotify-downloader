@@ -24,12 +24,33 @@ pub struct StreamResult {
     file_name: String,
 }
 
+/// Payload from the settings UI (`invoke` passes a single JSON object).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct SetSettingsPayload {
+    #[serde(alias = "cache_dir")]
+    cache_dir: Option<String>,
+    #[serde(alias = "download_dir")]
+    download_dir: Option<String>,
+    #[serde(alias = "spotify_client_id")]
+    spotify_client_id: Option<String>,
+    #[serde(alias = "spotify_client_secret")]
+    spotify_client_secret: Option<String>,
+    #[serde(alias = "lastfm_api_key")]
+    lastfm_api_key: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct AppSettings {
+    #[serde(default, alias = "cacheDir")]
     pub cache_dir: Option<String>,
+    #[serde(default, alias = "downloadDir")]
     pub download_dir: Option<String>,
+    #[serde(default, alias = "spotifyClientId")]
     pub spotify_client_id: Option<String>,
+    #[serde(default, alias = "spotifyClientSecret")]
     pub spotify_client_secret: Option<String>,
+    #[serde(default, alias = "lastfmApiKey")]
     pub lastfm_api_key: Option<String>,
 }
 
@@ -104,6 +125,29 @@ fn load_settings_from_disk() -> AppSettings {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+fn non_empty_opt(s: Option<String>) -> Option<String> {
+    s.filter(|t| !t.trim().is_empty())
+}
+
+/// Prefer in-memory values; fill gaps from disk (covers stale mutex vs `settings.json`).
+fn merge_app_settings(mem: AppSettings, disk: AppSettings) -> AppSettings {
+    AppSettings {
+        cache_dir: non_empty_opt(mem.cache_dir).or(non_empty_opt(disk.cache_dir)),
+        download_dir: non_empty_opt(mem.download_dir).or(non_empty_opt(disk.download_dir)),
+        spotify_client_id: non_empty_opt(mem.spotify_client_id)
+            .or(non_empty_opt(disk.spotify_client_id)),
+        spotify_client_secret: non_empty_opt(mem.spotify_client_secret)
+            .or(non_empty_opt(disk.spotify_client_secret)),
+        lastfm_api_key: non_empty_opt(mem.lastfm_api_key).or(non_empty_opt(disk.lastfm_api_key)),
+    }
+}
+
+fn effective_settings(state: &AppState) -> AppSettings {
+    let mem = state.settings.lock().unwrap().clone();
+    let disk = load_settings_from_disk();
+    merge_app_settings(mem, disk)
 }
 
 fn persist_settings(settings: &AppSettings) -> Result<(), String> {
@@ -394,9 +438,7 @@ fn spotify_is_configured(settings: &AppSettings) -> bool {
     id.is_some() && secret.is_some()
 }
 
-async fn lastfm_get(method: &str, extra_params: &str) -> Result<Value, String> {
-    let settings = load_settings_from_disk();
-    let api_key = resolve_lastfm_api_key(&settings)?;
+async fn lastfm_get(api_key: &str, method: &str, extra_params: &str) -> Result<Value, String> {
     let url = format!(
         "https://ws.audioscrobbler.com/2.0/?method={}&api_key={}&format=json{}",
         method, api_key, extra_params
@@ -409,6 +451,79 @@ async fn lastfm_get(method: &str, extra_params: &str) -> Result<Value, String> {
         .await
         .map_err(|e| format!("Failed to read response: {}", e))?;
     serde_json::from_str(&body).map_err(|e| format!("Invalid JSON from Last.fm: {}", e))
+}
+
+/// Try LRCLIB (free, no key) when lyrics.ovh has no match.
+async fn try_lrclib_lyrics(client: &reqwest::Client, artist: &str, title: &str) -> Option<String> {
+    let q = format!("{} {}", artist, title);
+    let url = format!(
+        "https://lrclib.net/api/search?q={}",
+        urlencoding::encode(&q)
+    );
+    let response = client.get(&url).send().await.ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let arr: Vec<Value> = response.json().await.ok()?;
+    for item in arr {
+        if let Some(plain) = item.get("plainLyrics").and_then(|v| v.as_str()) {
+            let p = plain.trim();
+            if !p.is_empty() {
+                return Some(p.to_string());
+            }
+        }
+        if let Some(sync) = item.get("syncedLyrics").and_then(|v| v.as_str()) {
+            let s = sync.trim();
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Free lyrics: try api.lyrics.ovh, then LRCLIB (lrclib.net).
+#[tauri::command]
+async fn fetch_lyrics(artist: String, title: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(18))
+        .user_agent("SpotDL-GUI/1.0 (https://github.com)")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let a = urlencoding::encode(&artist);
+    let t = urlencoding::encode(&title);
+    let ovh_url = format!("https://api.lyrics.ovh/v1/{}/{}", a, t);
+
+    if let Ok(response) = client.get(&ovh_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(val) = serde_json::from_str::<Value>(&body) {
+                    let ovh_err = val
+                        .get("error")
+                        .and_then(|x| x.as_str())
+                        .map(str::trim)
+                        .filter(|e| !e.is_empty());
+                    if ovh_err.is_none() {
+                        if let Some(ly) = val
+                            .get("lyrics")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            return Ok(ly.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(ly) = try_lrclib_lyrics(&client, &artist, &title).await {
+        return Ok(ly);
+    }
+
+    Err("No lyrics found (tried lyrics.ovh and LRCLIB).".to_string())
 }
 
 // ---------- Commands ----------
@@ -480,12 +595,12 @@ fn get_api_key() -> String {
 
 #[tauri::command]
 fn get_settings(state: State<AppState>) -> AppSettings {
-    state.settings.lock().unwrap().clone()
+    effective_settings(&state)
 }
 
 #[tauri::command]
 fn get_api_status(state: State<AppState>) -> ApiStatus {
-    let settings = state.settings.lock().unwrap().clone();
+    let settings = effective_settings(&state);
     ApiStatus {
         spotify_configured: spotify_is_configured(&settings),
         lastfm_configured: resolve_lastfm_api_key(&settings).is_ok(),
@@ -493,40 +608,35 @@ fn get_api_status(state: State<AppState>) -> ApiStatus {
 }
 
 #[tauri::command]
-fn set_settings(
-    cache_dir: Option<String>,
-    download_dir: Option<String>,
-    spotify_client_id: Option<String>,
-    spotify_client_secret: Option<String>,
-    lastfm_api_key: Option<String>,
-    state: State<AppState>,
-) -> Result<AppSettings, String> {
-    let mut settings = state.settings.lock().unwrap();
-    if let Some(dir) = cache_dir {
+fn set_settings(input: SetSettingsPayload, state: State<AppState>) -> Result<AppSettings, String> {
+    let mut settings = effective_settings(&state);
+    if let Some(dir) = input.cache_dir {
         settings.cache_dir = if dir.trim().is_empty() {
             None
         } else {
             Some(dir)
         };
     }
-    if let Some(dir) = download_dir {
+    if let Some(dir) = input.download_dir {
         settings.download_dir = if dir.trim().is_empty() {
             None
         } else {
             Some(dir)
         };
     }
-    if let Some(v) = spotify_client_id {
+    if let Some(v) = input.spotify_client_id {
         settings.spotify_client_id = if v.trim().is_empty() { None } else { Some(v) };
     }
-    if let Some(v) = spotify_client_secret {
+    if let Some(v) = input.spotify_client_secret {
         settings.spotify_client_secret = if v.trim().is_empty() { None } else { Some(v) };
     }
-    if let Some(v) = lastfm_api_key {
+    if let Some(v) = input.lastfm_api_key {
         settings.lastfm_api_key = if v.trim().is_empty() { None } else { Some(v) };
     }
     persist_settings(&settings)?;
-    Ok(settings.clone())
+    let saved = load_settings_from_disk();
+    *state.settings.lock().unwrap() = saved.clone();
+    Ok(saved)
 }
 
 #[tauri::command]
@@ -538,11 +648,18 @@ fn pick_folder(title: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-async fn fetch_track_metadata(artist: String, track: String) -> Result<TrackMetadata, String> {
+async fn fetch_track_metadata(
+    artist: String,
+    track: String,
+    state: State<'_, AppState>,
+) -> Result<TrackMetadata, String> {
+    let merged = effective_settings(&state);
+    let api_key = resolve_lastfm_api_key(&merged)?;
     let encoded_artist = urlencoding::encode(&artist);
     let encoded_track = urlencoding::encode(&track);
 
     let track_data = lastfm_get(
+        &api_key,
         "track.getInfo",
         &format!("&artist={}&track={}", encoded_artist, encoded_track),
     )
@@ -626,6 +743,7 @@ async fn fetch_track_metadata(artist: String, track: String) -> Result<TrackMeta
     if let Some(ref album) = album_name {
         let encoded_album = urlencoding::encode(album);
         if let Ok(album_data) = lastfm_get(
+            &api_key,
             "album.getInfo",
             &format!(
                 "&artist={}&album={}",
@@ -666,7 +784,7 @@ async fn fetch_lastfm(
     extra_params: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let settings = state.settings.lock().unwrap().clone();
+    let settings = effective_settings(&state);
     let api_key = resolve_lastfm_api_key(&settings)?;
 
     let url = format!(
@@ -964,7 +1082,7 @@ async fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
 /// Resolve Spotify URLs / playlist: queries via spotDL Python bridge.
 #[tauri::command]
 async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<String, String> {
-    let settings = state.settings.lock().unwrap().clone();
+    let settings = effective_settings(&state);
     if !spotify_is_configured(&settings) {
         return Err(
             "Spotify is not configured. Add Client ID and Secret in Settings.".to_string(),
@@ -1122,6 +1240,7 @@ pub fn run() {
             window_close,
             get_api_key,
             fetch_lastfm,
+            fetch_lyrics,
             fetch_track_metadata,
             spotify_search,
             cache_art_image,
