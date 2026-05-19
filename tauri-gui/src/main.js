@@ -2031,11 +2031,16 @@ function initAudioVisualizer() {
             analyser.getByteFrequencyData(dataArray);
             ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
 
+            let accentColor = "#1db954";
+            try {
+                accentColor = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || "#1db954";
+            } catch (e) {}
+
             const barWidth = 3;
             let x = 0;
             for (let i = 0; i < 15; i++) {
                 const barHeight = (dataArray[i] / 255) * vizCanvas.height;
-                ctx.fillStyle = "#0f0";
+                ctx.fillStyle = accentColor;
                 ctx.fillRect(
                     x,
                     vizCanvas.height - barHeight,
