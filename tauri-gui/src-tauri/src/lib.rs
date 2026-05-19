@@ -344,6 +344,7 @@ fn spotify_env_from_settings(settings: &AppSettings) -> HashMap<String, String> 
         .filter(|s| !s.is_empty())
         .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
         .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
+        .or_else(|| Some("83050cebbb5c42c7afbf488c7e3b777b".to_string()))
         .filter(|s| !s.is_empty());
     let secret = settings
         .spotify_client_secret
@@ -351,6 +352,7 @@ fn spotify_env_from_settings(settings: &AppSettings) -> HashMap<String, String> 
         .filter(|s| !s.is_empty())
         .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
         .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
+        .or_else(|| Some("998a328838b84e85b66e95143ed9a974".to_string()))
         .filter(|s| !s.is_empty());
     if let Some(v) = id {
         map.insert("SPOTIFY_CLIENT_ID".to_string(), v);
@@ -456,6 +458,7 @@ fn resolve_lastfm_api_key(settings: &AppSettings) -> Result<String, String> {
         .cloned()
         .or_else(|| env::var("LASTFM_API_KEY").ok())
         .or_else(|| option_env!("LASTFM_API_KEY").map(|s| s.to_string()))
+        .or_else(|| Some("feb8efb1f28c53e4e93b6eda06176016".to_string()))
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             "Last.fm API key not set. Add it in Settings or src-tauri/.env (LASTFM_API_KEY)."
@@ -472,6 +475,7 @@ fn spotify_is_configured(settings: &AppSettings) -> bool {
         .cloned()
         .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
         .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
+        .or_else(|| Some("83050cebbb5c42c7afbf488c7e3b777b".to_string()))
         .filter(|s| !s.is_empty());
     let secret = settings
         .spotify_client_secret
@@ -480,6 +484,7 @@ fn spotify_is_configured(settings: &AppSettings) -> bool {
         .cloned()
         .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
         .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
+        .or_else(|| Some("998a328838b84e85b66e95143ed9a974".to_string()))
         .filter(|s| !s.is_empty());
     id.is_some() && secret.is_some()
 }
