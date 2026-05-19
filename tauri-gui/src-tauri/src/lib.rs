@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use dotenvy::dotenv;
 use std::env;
-use tauri::State;
+use tauri::{Manager, State};
 
 const LASTFM_PLACEHOLDER: &str = "2a96cbd8b46e442fc41c2b86b821562f";
 
@@ -30,6 +30,13 @@ pub struct AppSettings {
     pub download_dir: Option<String>,
     pub spotify_client_id: Option<String>,
     pub spotify_client_secret: Option<String>,
+    pub lastfm_api_key: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ApiStatus {
+    pub spotify_configured: bool,
+    pub lastfm_configured: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -353,10 +360,43 @@ fn best_image_url(images: &[ArtImage]) -> Option<String> {
     images.first().map(|i| i.url.clone())
 }
 
-async fn lastfm_get(method: &str, extra_params: &str) -> Result<Value, String> {
+fn resolve_lastfm_api_key(settings: &AppSettings) -> Result<String, String> {
     load_env();
-    let api_key =
-        env::var("LASTFM_API_KEY").map_err(|_| "LASTFM_API_KEY not set in .env".to_string())?;
+    settings
+        .lastfm_api_key
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .or_else(|| env::var("LASTFM_API_KEY").ok())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            "Last.fm API key not set. Add it in Settings or src-tauri/.env (LASTFM_API_KEY)."
+                .to_string()
+        })
+}
+
+fn spotify_is_configured(settings: &AppSettings) -> bool {
+    load_env();
+    let id = settings
+        .spotify_client_id
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
+        .filter(|s| !s.is_empty());
+    let secret = settings
+        .spotify_client_secret
+        .as_ref()
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
+        .filter(|s| !s.is_empty());
+    id.is_some() && secret.is_some()
+}
+
+async fn lastfm_get(method: &str, extra_params: &str) -> Result<Value, String> {
+    let settings = load_settings_from_disk();
+    let api_key = resolve_lastfm_api_key(&settings)?;
     let url = format!(
         "https://ws.audioscrobbler.com/2.0/?method={}&api_key={}&format=json{}",
         method, api_key, extra_params
@@ -373,6 +413,65 @@ async fn lastfm_get(method: &str, extra_params: &str) -> Result<Value, String> {
 
 // ---------- Commands ----------
 
+fn fallback_geo_country() -> String {
+    "United States".to_string()
+}
+
+/// Country name suitable for Last.fm `geo.gettoptracks` `country` parameter (English name).
+#[tauri::command]
+async fn get_geo_country() -> String {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .user_agent("SpotDL-GUI/1.0 (https://github.com)")
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return fallback_geo_country(),
+    };
+    let Ok(resp) = client.get("https://ipapi.co/json/").send().await else {
+        return fallback_geo_country();
+    };
+    if !resp.status().is_success() {
+        return fallback_geo_country();
+    }
+    let Ok(val): Result<Value, _> = resp.json().await else {
+        return fallback_geo_country();
+    };
+    val.get("country_name")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(std::string::ToString::to_string)
+        .unwrap_or_else(fallback_geo_country)
+}
+
+#[tauri::command]
+fn window_minimize(app: tauri::AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .minimize()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn window_toggle_maximize(app: tauri::AppHandle) -> Result<(), String> {
+    let w = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    if w.is_maximized().map_err(|e| e.to_string())? {
+        w.unmaximize().map_err(|e| e.to_string())
+    } else {
+        w.maximize().map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn window_close(app: tauri::AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .close()
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn get_api_key() -> String {
     load_env();
@@ -385,11 +484,21 @@ fn get_settings(state: State<AppState>) -> AppSettings {
 }
 
 #[tauri::command]
+fn get_api_status(state: State<AppState>) -> ApiStatus {
+    let settings = state.settings.lock().unwrap().clone();
+    ApiStatus {
+        spotify_configured: spotify_is_configured(&settings),
+        lastfm_configured: resolve_lastfm_api_key(&settings).is_ok(),
+    }
+}
+
+#[tauri::command]
 fn set_settings(
     cache_dir: Option<String>,
     download_dir: Option<String>,
     spotify_client_id: Option<String>,
     spotify_client_secret: Option<String>,
+    lastfm_api_key: Option<String>,
     state: State<AppState>,
 ) -> Result<AppSettings, String> {
     let mut settings = state.settings.lock().unwrap();
@@ -412,6 +521,9 @@ fn set_settings(
     }
     if let Some(v) = spotify_client_secret {
         settings.spotify_client_secret = if v.trim().is_empty() { None } else { Some(v) };
+    }
+    if let Some(v) = lastfm_api_key {
+        settings.lastfm_api_key = if v.trim().is_empty() { None } else { Some(v) };
     }
     persist_settings(&settings)?;
     Ok(settings.clone())
@@ -549,10 +661,13 @@ async fn fetch_track_metadata(artist: String, track: String) -> Result<TrackMeta
 
 /// Proxy HTTP GET requests to Last.fm from Rust.
 #[tauri::command]
-async fn fetch_lastfm(method: String, extra_params: String) -> Result<String, String> {
-    load_env();
-    let api_key = env::var("LASTFM_API_KEY")
-        .map_err(|_| "LASTFM_API_KEY not set in .env".to_string())?;
+async fn fetch_lastfm(
+    method: String,
+    extra_params: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let api_key = resolve_lastfm_api_key(&settings)?;
 
     let url = format!(
         "https://ws.audioscrobbler.com/2.0/?method={}&api_key={}&format=json{}",
@@ -574,17 +689,35 @@ async fn fetch_lastfm(method: String, extra_params: String) -> Result<String, St
 /// Download a song to the cache directory for streaming.
 #[tauri::command]
 async fn stream_song(query: String, state: State<'_, AppState>) -> Result<StreamResult, String> {
+    use std::hash::{Hash, Hasher};
+    use std::collections::hash_map::DefaultHasher;
+
     let settings = state.settings.lock().unwrap().clone();
     let cache_dir = resolve_cache_dir(&settings);
 
-    let before: HashSet<PathBuf> = std::fs::read_dir(&cache_dir)
-        .map_err(|e| format!("Cannot read cache dir: {}", e))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
+    let mut hasher = DefaultHasher::new();
+    query.hash(&mut hasher);
+    let hash_str = format!("{:x}", hasher.finish());
+
+    // Check if it's already cached before downloading
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        let files: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| is_audio_file(&e.path()) && e.path().file_stem().and_then(|s| s.to_str()) == Some(&hash_str))
+            .collect();
+            
+        if let Some(existing_file) = files.first() {
+            let file_path = existing_file.path();
+            let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            return Ok(StreamResult {
+                file_path: file_path.to_string_lossy().to_string(),
+                file_name,
+            });
+        }
+    }
 
     let yt_query = format!("ytsearch1:{} audio", query);
-    let out_template = format!("{}/%(title)s.%(ext)s", cache_dir.to_str().unwrap());
+    let out_template = format!("{}/{}.%(ext)s", cache_dir.to_str().unwrap(), hash_str);
 
     let output = Command::new("python")
         .arg("-m")
@@ -604,31 +737,16 @@ async fn stream_song(query: String, state: State<'_, AppState>) -> Result<Stream
         return Err(format!("yt-dlp failed:\n{}\n{}", stderr, stdout));
     }
 
-    let new_files: Vec<PathBuf> = std::fs::read_dir(&cache_dir)
+    let files: Vec<_> = std::fs::read_dir(&cache_dir)
         .map_err(|e| format!("Cannot read cache dir: {}", e))?
         .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| !before.contains(p) && is_audio_file(p))
+        .filter(|e| is_audio_file(&e.path()) && e.path().file_stem().and_then(|s| s.to_str()) == Some(&hash_str))
         .collect();
 
-    let file_path = if let Some(path) = new_files.first() {
-        path.clone()
-    } else {
-        let mut files: Vec<_> = std::fs::read_dir(&cache_dir)
-            .map_err(|e| format!("Cannot read cache dir: {}", e))?
-            .filter_map(|e| e.ok())
-            .filter(|e| is_audio_file(&e.path()))
-            .collect();
-
-        files.sort_by_key(|e| {
-            std::cmp::Reverse(e.metadata().ok().and_then(|m| m.modified().ok()))
-        });
-
-        files
-            .first()
-            .map(|f| f.path())
-            .ok_or_else(|| "No audio file found after download".to_string())?
-    };
+    let file_path = files
+        .first()
+        .map(|f| f.path())
+        .ok_or_else(|| "No audio file found after download".to_string())?;
 
     let file_name = file_path
         .file_name()
@@ -721,7 +839,62 @@ fn get_downloaded_keys(state: State<AppState>) -> Vec<String> {
     let settings = state.settings.lock().unwrap().clone();
     load_download_index(&settings).into_keys().collect()
 }
+#[tauri::command]
+fn get_download_index(state: State<'_, AppState>) -> std::collections::HashMap<String, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    load_download_index(&settings)
+}
 
+#[tauri::command]
+fn delete_downloaded_song(key: String, state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let mut index = load_download_index(&settings);
+    if let Some(filename) = index.remove(&key) {
+        let download_dir = resolve_download_dir(&settings);
+        let file_path = download_dir.join(&filename);
+        if file_path.exists() {
+            std::fs::remove_file(file_path).map_err(|e| format!("Failed to delete file: {}", e))?;
+        }
+        let _ = save_download_index(&settings, &index);
+        Ok(())
+    } else {
+        Err("Song not found in index".to_string())
+    }
+}
+
+fn get_dir_size(path: &std::path::Path) -> std::io::Result<u64> {
+    let mut size = 0;
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                size += get_dir_size(&path)?;
+            } else {
+                size += entry.metadata()?.len();
+            }
+        }
+    }
+    Ok(size)
+}
+
+#[tauri::command]
+fn get_cache_size(state: State<'_, AppState>) -> Result<u64, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let cache_dir = resolve_cache_dir(&settings);
+    get_dir_size(&cache_dir).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_cache(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let cache_dir = resolve_cache_dir(&settings);
+    if cache_dir.exists() {
+        std::fs::remove_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
 #[tauri::command]
 fn get_cache_path(state: State<AppState>) -> String {
     let settings = state.settings.lock().unwrap().clone();
@@ -792,6 +965,11 @@ async fn read_file_bytes(path: String) -> Result<Vec<u8>, String> {
 #[tauri::command]
 async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<String, String> {
     let settings = state.settings.lock().unwrap().clone();
+    if !spotify_is_configured(&settings) {
+        return Err(
+            "Spotify is not configured. Add Client ID and Secret in Settings.".to_string(),
+        );
+    }
     let script = resolve_spotify_script()
         .ok_or_else(|| "spotify_query.py not found in scripts/".to_string())?;
 
@@ -871,6 +1049,56 @@ fn pick_best_from_metadata(meta: &TrackMetadata) -> Option<String> {
         .or_else(|| best_image_url(&meta.track_images))
 }
 
+use axum::{extract::Query, response::IntoResponse, routing::get, Router};
+use tower_http::cors::CorsLayer;
+use tokio_util::io::ReaderStream;
+use axum::body::Body;
+
+#[derive(serde::Deserialize)]
+struct StreamQuery {
+    q: String,
+}
+
+async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse {
+    let query = params.q;
+    let yt_query = format!("ytsearch1:{} audio", query);
+    
+    // Spawn yt-dlp piping out directly
+    let mut child = tokio::process::Command::new("python")
+        .arg("-m")
+        .arg("yt_dlp")
+        .arg(&yt_query)
+        .arg("-x")
+        .arg("--audio-format")
+        .arg("mp3")
+        .arg("-o")
+        .arg("-")
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .expect("failed to spawn yt-dlp");
+
+    let stdout = child.stdout.take().unwrap();
+    let stream = ReaderStream::new(stdout);
+    let body = Body::from_stream(stream);
+
+    axum::response::Response::builder()
+        .header("Content-Type", "audio/mpeg")
+        .header("Transfer-Encoding", "chunked")
+        .body(body)
+        .unwrap()
+}
+
+fn start_stream_server() {
+    tauri::async_runtime::spawn(async {
+        let app = Router::new()
+            .route("/stream", get(stream_handler))
+            .layer(CorsLayer::permissive());
+        
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await.unwrap();
+        axum::serve(listener, app).await.unwrap();
+    });
+}
+
 // ---------- App Entry ----------
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -878,12 +1106,20 @@ pub fn run() {
     let settings = load_settings_from_disk();
 
     tauri::Builder::default()
+        .setup(|_app| {
+            start_stream_server();
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .manage(AppState {
             settings: Mutex::new(settings),
         })
         .invoke_handler(tauri::generate_handler![
             download_song,
+            get_geo_country,
+            window_minimize,
+            window_toggle_maximize,
+            window_close,
             get_api_key,
             fetch_lastfm,
             fetch_track_metadata,
@@ -894,9 +1130,14 @@ pub fn run() {
             save_song_with_metadata,
             is_track_downloaded,
             get_downloaded_keys,
+            get_download_index,
+            delete_downloaded_song,
+            get_cache_size,
+            clear_cache,
             get_cache_path,
             get_download_path,
             get_settings,
+            get_api_status,
             set_settings,
             pick_folder,
             read_audio_file,

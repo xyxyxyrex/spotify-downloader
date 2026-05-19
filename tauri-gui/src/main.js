@@ -26,6 +26,13 @@ const LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
 const IMAGE_SIZE_ORDER = ["mega", "extralarge", "large", "medium", "small"];
 
 const audioPlayer = new Audio();
+// Allow Web Audio API processing for visualizer
+audioPlayer.crossOrigin = "anonymous";
+let audioContext = null;
+let analyser = null;
+let dataArray = null;
+let visualizerInitialized = false;
+
 let currentStreamData = null;
 let isPlaying = false;
 let currentSong = null;
@@ -33,21 +40,29 @@ let metadataRequestId = 0;
 let downloadedKeys = new Set();
 let isBuffering = false;
 
+// Queue System variables
+let appQueue = [];
+let queueIndex = -1;
+
+// Global flag to prevent buffer racing
+let activePlayId = 0;
+
 const views = {
     home: document.getElementById("view-home"),
     search: document.getElementById("view-search"),
     settings: document.getElementById("view-settings"),
+    downloads: document.getElementById("view-downloads"),
     playlist: document.getElementById("view-playlist"),
+    queue: document.getElementById("view-queue"),
 };
 
 const navs = {
     home: document.getElementById("nav-home"),
     search: document.getElementById("nav-search"),
     settings: document.getElementById("nav-settings"),
+    downloads: document.getElementById("nav-downloads"),
+    queue: document.getElementById("nav-queue"),
 };
-
-let collectionViewMode = localStorage.getItem("collectionViewMode") || "grid";
-let currentCollectionSongs = [];
 
 const searchInput = document.getElementById("search-input");
 const searchResultsList = document.getElementById("search-results-list");
@@ -80,7 +95,11 @@ const cacheDirInput = document.getElementById("cache-dir-input");
 const downloadDirInput = document.getElementById("download-dir-input");
 const spotifyIdInput = document.getElementById("spotify-id-input");
 const spotifySecretInput = document.getElementById("spotify-secret-input");
+const lastfmApiKeyInput = document.getElementById("lastfm-api-key-input");
+const apiStatusHint = document.getElementById("api-status-hint");
 const settingsStatus = document.getElementById("settings-status");
+
+let apiStatus = { spotify_configured: false, lastfm_configured: false };
 const playlistListEl = document.getElementById("playlist-list");
 const viewModeGridBtn = document.getElementById("view-mode-grid");
 const viewModeListBtn = document.getElementById("view-mode-list");
@@ -116,86 +135,89 @@ const PALETTE = [
     "#ff9800",
 ];
 
-const HOME_COLLECTIONS = [
-    {
-        id: "top-100-global",
-        row: "charts",
-        title: "Top 100",
-        subtitle: "Global · 100 tracks",
-        type: "tracks",
-        load: () => fetchChartTracks("chart.gettoptracks", "&limit=100"),
-        preview: () => fetchChartTracks("chart.gettoptracks", "&limit=1"),
-    },
-    {
-        id: "top-100-us",
-        row: "charts",
-        title: "Top 100",
-        subtitle: "United States · 100 tracks",
-        type: "tracks",
-        load: () =>
-            fetchChartTracks(
-                "geo.gettoptracks",
-                "&country=United+States&limit=100",
-            ),
-        preview: () =>
-            fetchChartTracks(
-                "geo.gettoptracks",
-                "&country=United+States&limit=1",
-            ),
-    },
-    {
-        id: "top-tracks-global",
-        row: "tracks",
-        title: "Top Tracks",
-        subtitle: "Global · 50 tracks",
-        type: "tracks",
-        load: () => fetchChartTracks("chart.gettoptracks", "&limit=50"),
-        preview: () => fetchChartTracks("chart.gettoptracks", "&limit=1"),
-    },
-    {
-        id: "top-tracks-us",
-        row: "tracks",
-        title: "Top Tracks",
-        subtitle: "United States · 50 tracks",
-        type: "tracks",
-        load: () =>
-            fetchChartTracks(
-                "geo.gettoptracks",
-                "&country=United+States&limit=50",
-            ),
-        preview: () =>
-            fetchChartTracks(
-                "geo.gettoptracks",
-                "&country=United+States&limit=1",
-            ),
-    },
-    {
-        id: "top-albums-global",
-        row: "albums",
-        title: "Top Albums",
-        subtitle: "Global Pop · 50 albums",
-        type: "albums",
-        load: () => fetchChartAlbums("tag.gettopalbums", "&tag=pop&limit=50"),
-        preview: () => fetchChartAlbums("tag.gettopalbums", "&tag=pop&limit=1"),
-    },
-    {
-        id: "top-albums-us",
-        row: "albums",
-        title: "Top Albums",
-        subtitle: "US Hip-Hop · 50 albums",
-        type: "albums",
-        load: () =>
-            fetchChartAlbums(
-                "tag.gettopalbums",
-                "&tag=hip-hop&limit=50",
-            ),
-        preview: () =>
-            fetchChartAlbums(
-                "tag.gettopalbums",
-                "&tag=hip-hop&limit=1",
-            ),
-    },
-];
+function buildHomeCollections(geoCountry) {
+    const country = (geoCountry && String(geoCountry).trim()) || "United States";
+    const countryEnc = encodeURIComponent(country);
+    return [
+        {
+            id: "top-100-global",
+            row: "charts",
+            title: "Top 100",
+            subtitle: "Global · 100 tracks",
+            type: "tracks",
+            load: () => fetchChartTracks("chart.gettoptracks", "&limit=100"),
+            preview: () => fetchChartTracks("chart.gettoptracks", "&limit=1"),
+        },
+        {
+            id: "top-100-local",
+            row: "charts",
+            title: "Top 100",
+            subtitle: `${country} · 100 tracks`,
+            type: "tracks",
+            load: () =>
+                fetchChartTracks(
+                    "geo.gettoptracks",
+                    `&country=${countryEnc}&limit=100`,
+                ),
+            preview: () =>
+                fetchChartTracks(
+                    "geo.gettoptracks",
+                    `&country=${countryEnc}&limit=1`,
+                ),
+        },
+        {
+            id: "top-tracks-global",
+            row: "tracks",
+            title: "Top Tracks",
+            subtitle: "Global · 50 tracks",
+            type: "tracks",
+            load: () => fetchChartTracks("chart.gettoptracks", "&limit=50"),
+            preview: () => fetchChartTracks("chart.gettoptracks", "&limit=1"),
+        },
+        {
+            id: "top-tracks-local",
+            row: "tracks",
+            title: "Top Tracks",
+            subtitle: `${country} · 50 tracks`,
+            type: "tracks",
+            load: () =>
+                fetchChartTracks(
+                    "geo.gettoptracks",
+                    `&country=${countryEnc}&limit=50`,
+                ),
+            preview: () =>
+                fetchChartTracks(
+                    "geo.gettoptracks",
+                    `&country=${countryEnc}&limit=1`,
+                ),
+        },
+        {
+            id: "top-albums-global",
+            row: "albums",
+            title: "Top Albums",
+            subtitle: "Global Pop · 50 albums",
+            type: "albums",
+            load: () =>
+                fetchChartAlbums("tag.gettopalbums", "&tag=pop&limit=50"),
+            preview: () =>
+                fetchChartAlbums("tag.gettopalbums", "&tag=pop&limit=1"),
+        },
+        {
+            id: "top-albums-alt",
+            row: "albums",
+            title: "Top Albums",
+            subtitle: "Hip-Hop · 50 albums",
+            type: "albums",
+            load: () =>
+                fetchChartAlbums("tag.gettopalbums", "&tag=hip-hop&limit=50"),
+            preview: () =>
+                fetchChartAlbums("tag.gettopalbums", "&tag=hip-hop&limit=1"),
+        },
+    ];
+}
+
+/** Filled after geo lookup (see DOMContentLoaded). */
+let homeCollections = buildHomeCollections("United States");
 
 function songKey(song) {
     return `${song.artist}::${song.title}`;
@@ -327,6 +349,94 @@ function normalizeDurationSecs(raw) {
     return n;
 }
 
+// --- Queue Logic ---
+function renderQueueUI() {
+    const list = document.getElementById("queue-list");
+    const msg = document.getElementById("queue-empty-msg");
+    list.innerHTML = "";
+
+    if (appQueue.length === 0) {
+        msg.style.display = "block";
+        return;
+    }
+    
+    msg.style.display = "none";
+    
+    appQueue.forEach((song, idx) => {
+        const item = document.createElement("div");
+        item.style.display = "flex";
+        item.style.alignItems = "center";
+        item.style.justifyContent = "space-between";
+        item.style.padding = "10px";
+        item.style.background = idx === queueIndex ? "var(--accent-hover)" : "#222";
+        item.style.borderRadius = "6px";
+        item.style.cursor = "pointer";
+        item.draggable = true;
+
+        const info = document.createElement("div");
+        info.innerHTML = `<strong style="color: ${idx === queueIndex ? 'var(--primary-color)' : '#fff'}">${escapeHtml(song.title)}</strong><br><span style="font-size: 12px; color: #888;">${escapeHtml(song.artist)}</span>`;
+        
+        info.onclick = () => {
+            queueIndex = idx;
+            renderQueueUI();
+            playSong(song);
+        };
+
+        const removeBtn = document.createElement("button");
+        removeBtn.innerHTML = "×";
+        removeBtn.style.background = "transparent";
+        removeBtn.style.border = "none";
+        removeBtn.style.color = "#aaa";
+        removeBtn.style.cursor = "pointer";
+        removeBtn.style.fontSize = "18px";
+        removeBtn.onclick = (e) => {
+            e.stopPropagation();
+            removeFromQueue(idx);
+        };
+
+        // Drag/Drop hooks
+        item.ondragstart = (e) => { e.dataTransfer.setData("text/plain", idx); item.style.opacity = "0.5"; };
+        item.ondragend = () => { item.style.opacity = "1"; };
+        item.ondragover = (e) => e.preventDefault();
+        item.ondrop = (e) => {
+            e.preventDefault();
+            const fromIdx = parseInt(e.dataTransfer.getData("text/plain"));
+            if (fromIdx !== idx) {
+                const moved = appQueue.splice(fromIdx, 1)[0];
+                appQueue.splice(idx, 0, moved);
+                // Adjust active index
+                if (queueIndex === fromIdx) queueIndex = idx;
+                else if (queueIndex > fromIdx && queueIndex <= idx) queueIndex--;
+                else if (queueIndex < fromIdx && queueIndex >= idx) queueIndex++;
+                renderQueueUI();
+            }
+        };
+
+        item.appendChild(info);
+        item.appendChild(removeBtn);
+        list.appendChild(item);
+    });
+}
+
+function removeFromQueue(idx) {
+    appQueue.splice(idx, 1);
+    if (queueIndex === idx) {
+        queueIndex--; // Reset to previous so next song plays correctly
+        setTimeout(playNextInQueue, 300);
+    } else if (queueIndex > idx) {
+        queueIndex--;
+    }
+    renderQueueUI();
+}
+
+function playNextInQueue() {
+    if (queueIndex + 1 < appQueue.length) {
+        queueIndex++;
+        renderQueueUI();
+        playSong(appQueue[queueIndex]);
+    }
+}
+
 function formatDuration(seconds) {
     const n = normalizeDurationSecs(seconds);
     if (!n) return null;
@@ -407,6 +517,7 @@ async function updateNowPlayingDownloadBadge(song) {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+    setupTitleBar();
     setupNavigation();
     setupSearch();
     setupContextMenu();
@@ -417,15 +528,68 @@ window.addEventListener("DOMContentLoaded", async () => {
     setupCollectionViewToggle();
     setupPlaylists();
 
+    document.getElementById("btn-clear-queue").addEventListener("click", () => {
+        appQueue = [];
+        queueIndex = -1;
+        renderQueueUI();
+    });
+
     await loadSettingsUI();
+    await refreshApiStatus();
     await refreshDownloadedKeys();
     await loadPlaylistsFromDisk();
     renderPlaylistSidebar();
-    renderHomeBrowse();
+
+    try {
+        const country = await invoke("get_geo_country");
+        if (country && typeof country === "string") {
+            homeCollections = buildHomeCollections(country);
+        }
+    } catch (err) {
+        console.warn("Geo country lookup failed:", err);
+    }
+    await renderHomeBrowse();
 });
+
+function setupTitleBar() {
+    const minBtn = document.getElementById("titlebar-min");
+    const maxBtn = document.getElementById("titlebar-max");
+    const closeBtn = document.getElementById("titlebar-close");
+    minBtn?.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+            await invoke("window_minimize");
+        } catch (err) {
+            console.error(err);
+        }
+    });
+    maxBtn?.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+            await invoke("window_toggle_maximize");
+        } catch (err) {
+            console.error(err);
+        }
+    });
+    closeBtn?.addEventListener("click", async (e) => {
+        e.preventDefault();
+        try {
+            await invoke("window_close");
+        } catch (err) {
+            console.error(err);
+        }
+    });
+}
 
 function setupPlayer() {
     audioPlayer.volume = Number(volumeBar.value) / 100;
+
+    const playerQueueBtn = document.getElementById("player-queue-btn");
+    playerQueueBtn?.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (window.switchView) window.switchView("queue");
+        renderQueueUI();
+    });
 
     volumeBar.addEventListener("input", (e) => {
         audioPlayer.volume = Number(e.target.value) / 100;
@@ -446,6 +610,7 @@ function setupPlayer() {
     audioPlayer.addEventListener("ended", () => {
         btnPlay.textContent = "▶";
         isPlaying = false;
+        playNextInQueue();
     });
 
     progressBar.addEventListener("input", (e) => {
@@ -474,7 +639,19 @@ function setupNavigation() {
         Object.values(navs).forEach((n) => n.classList.remove("active"));
         if (views[viewName]) views[viewName].classList.remove("hidden");
         if (navs[viewName]) navs[viewName].classList.add("active");
+
+        // Clear active playlist state when navigating away so it can be re-accessed properly
+        if (viewName !== "playlist") {
+            setActivePlaylistId(null);
+            renderPlaylistSidebar();
+        }
+
         if (viewName === "home") showHomeBrowse();
+
+        const playerQueueBtn = document.getElementById("player-queue-btn");
+        if (playerQueueBtn) {
+            playerQueueBtn.classList.toggle("active", viewName === "queue");
+        }
     };
     window.switchView = switchView;
 
@@ -487,10 +664,81 @@ function setupNavigation() {
         switchView("search");
         searchInput.focus();
     });
-    navs.settings.addEventListener("click", (e) => {
+    navs.settings.addEventListener("click", async (e) => {
         e.preventDefault();
         switchView("settings");
+        await refreshApiStatus();
     });
+    navs.downloads.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchView("downloads");
+        initDownloadsView();
+    });
+    navs.queue.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchView("queue");
+        renderQueueUI();
+    });
+}
+
+function initAudioVisualizer() {
+    if (visualizerInitialized) return;
+
+    const npContainer = document.querySelector(".now-playing");
+    if (!npContainer || document.getElementById("audio-visualizer")) return;
+
+    const vizCanvas = document.createElement("canvas");
+    vizCanvas.id = "audio-visualizer";
+    vizCanvas.width = 60;
+    vizCanvas.height = 30;
+    vizCanvas.style.marginLeft = "15px";
+    vizCanvas.style.pointerEvents = "none";
+
+    npContainer.appendChild(vizCanvas);
+
+    try {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            const source = audioContext.createMediaElementSource(audioPlayer);
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+            analyser.fftSize = 64;
+        }
+
+        const ctx = vizCanvas.getContext("2d");
+
+        function draw() {
+            requestAnimationFrame(draw);
+            if (!isPlaying || !analyser) {
+                ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+                return;
+            }
+
+            const bufferLength = analyser.frequencyBinCount;
+            if (!dataArray || dataArray.length !== bufferLength) {
+                dataArray = new Uint8Array(bufferLength);
+            }
+
+            analyser.getByteFrequencyData(dataArray);
+            ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+
+            const barWidth = 3;
+            let x = 0;
+            for (let i = 0; i < 15; i++) {
+                const barHeight = (dataArray[i] / 255) * vizCanvas.height;
+                ctx.fillStyle = "#0f0";
+                ctx.fillRect(x, vizCanvas.height - barHeight, barWidth, barHeight);
+                x += barWidth + 1;
+            }
+        }
+
+        draw();
+        visualizerInitialized = true;
+    } catch (err) {
+        console.warn("Audio visualizer unavailable:", err);
+        vizCanvas.remove();
+    }
 }
 
 function setupHome() {
@@ -513,7 +761,7 @@ async function renderHomeBrowse() {
         r.innerHTML = "";
     });
 
-    for (const col of HOME_COLLECTIONS) {
+    for (const col of homeCollections) {
         const card = createCollectionCard(col);
         rows[col.row]?.appendChild(card);
     }
@@ -661,6 +909,28 @@ async function updateTileArt(container, song) {
     }
 }
 
+async function refreshApiStatus() {
+    try {
+        apiStatus = await invoke("get_api_status");
+        if (!apiStatusHint) return;
+        if (apiStatus.spotify_configured && apiStatus.lastfm_configured) {
+            apiStatusHint.textContent =
+                "Spotify and Last.fm are configured.";
+        } else if (apiStatus.spotify_configured) {
+            apiStatusHint.textContent =
+                "Spotify configured. Add a Last.fm key for charts and search fallback.";
+        } else if (apiStatus.lastfm_configured) {
+            apiStatusHint.textContent =
+                "Last.fm configured (charts & search). Add Spotify ID/Secret for playlists and Spotify URLs.";
+        } else {
+            apiStatusHint.textContent =
+                "Add a Last.fm API key and/or Spotify credentials to load music.";
+        }
+    } catch (err) {
+        console.error("Failed to read API status:", err);
+    }
+}
+
 async function loadSettingsUI() {
     try {
         const [settings, cachePath, downloadPath] = await Promise.all([
@@ -672,6 +942,9 @@ async function loadSettingsUI() {
         downloadDirInput.value = settings.download_dir || "";
         spotifyIdInput.value = settings.spotify_client_id || "";
         spotifySecretInput.value = settings.spotify_client_secret || "";
+        if (lastfmApiKeyInput) {
+            lastfmApiKeyInput.value = settings.lastfm_api_key || "";
+        }
         cacheDirInput.placeholder = cachePath;
         downloadDirInput.placeholder = downloadPath;
     } catch (err) {
@@ -704,8 +977,10 @@ function setupSettings() {
                     spotifyClientId: spotifyIdInput.value.trim() || null,
                     spotifyClientSecret:
                         spotifySecretInput.value.trim() || null,
+                    lastfmApiKey: lastfmApiKeyInput?.value.trim() || null,
                 });
                 await loadSettingsUI();
+                await refreshApiStatus();
                 setSettingsStatus("Settings saved.", "ok");
             } catch (err) {
                 setSettingsStatus(`Save failed: ${err}`, "err");
@@ -721,12 +996,15 @@ function setupSettings() {
                     downloadDir: "",
                     spotifyClientId: "",
                     spotifyClientSecret: "",
+                    lastfmApiKey: "",
                 });
                 cacheDirInput.value = "";
                 downloadDirInput.value = "";
                 spotifyIdInput.value = "";
                 spotifySecretInput.value = "";
+                if (lastfmApiKeyInput) lastfmApiKeyInput.value = "";
                 await loadSettingsUI();
+                await refreshApiStatus();
                 setSettingsStatus("Reset to default locations.", "ok");
             } catch (err) {
                 setSettingsStatus(`Reset failed: ${err}`, "err");
@@ -830,6 +1108,36 @@ async function runSpotifySearch(query) {
     return JSON.parse(raw);
 }
 
+function hasSpotifyResults(data) {
+    if (!data || data.error) return false;
+    if (data.tracks?.length) return true;
+    if (data.artists?.length) return true;
+    if (data.type === "playlist" || data.type === "album" || data.type === "artist")
+        return true;
+    return false;
+}
+
+async function searchLastFmTracks(query) {
+    const raw = await invoke("fetch_lastfm", {
+        method: "track.search",
+        extraParams: `&track=${encodeURIComponent(query)}&limit=20`,
+    });
+    const lastData = JSON.parse(raw);
+    if (lastData.error) {
+        throw new Error(lastData.message || String(lastData.error));
+    }
+    const tracks = lastData.results?.trackmatches?.track;
+    if (!tracks) return [];
+    const list = Array.isArray(tracks) ? tracks : [tracks];
+    return list.map((t) => ({
+        title: t.name,
+        artist: t.artist,
+        album: null,
+        image: extractImageFromLastFmTrack(t),
+        images: parseImagesFromLastFm(t.image),
+    }));
+}
+
 function renderSpotifySearchResults(
     data,
     container = searchResultsList,
@@ -869,6 +1177,93 @@ function renderSpotifySearchResults(
         return;
     }
 
+    if (data.type === "artist") {
+        const header = document.createElement("div");
+        header.className = "search-section";
+        header.innerHTML = `
+            <h3>> Artist: ${escapeHtml(data.name)}</h3>
+            <p class="collection-subtitle">${(data.genres || []).slice(0, 3).join(", ")}</p>
+        `;
+        target.appendChild(header);
+
+        if (data.tracks && data.tracks.length > 0) {
+            const h = document.createElement("div");
+            h.className = "search-section";
+            h.innerHTML = `<h4 style="margin: 15px 0 10px; color: #fff;">Top Tracks</h4>`;
+            target.appendChild(h);
+            const list = document.createElement("div");
+            list.className = "song-list";
+            target.appendChild(list);
+            const songList = data.tracks.map(mapSpotifyTrack);
+            renderSongList(songList, list);
+        }
+
+        if (data.albums && data.albums.length > 0) {
+            const h2 = document.createElement("div");
+            h2.className = "search-section";
+            h2.innerHTML = `<h4 style="margin: 20px 0 10px; border-bottom: 1px solid #333; padding-bottom: 5px; color: #fff;">Albums & Singles</h4>`;
+            target.appendChild(h2);
+            data.albums.forEach(album => {
+                const g = document.createElement("div");
+                g.className = "search-section";
+                g.innerHTML = `<h5 style="margin: 15px 0 10px; color:#aaa; font-weight: normal;">💿 ${escapeHtml(album.name)}</h5>`;
+                target.appendChild(g);
+                const albumList = document.createElement("div");
+                albumList.className = "song-list";
+                target.appendChild(albumList);
+                renderSongList((album.tracks || []).map(mapSpotifyTrack), albumList);
+            });
+        }
+        return;
+    }
+
+    if (data.artists && data.artists.length > 0) {
+        const h = document.createElement("div");
+        h.className = "search-section";
+        h.innerHTML = `<h3>> Artists</h3>`;
+        target.appendChild(h);
+        
+        const artistGrid = document.createElement("div");
+        artistGrid.className = "artist-grid";
+        
+        data.artists.forEach(artist => {
+            const a = document.createElement("div");
+            a.className = "artist-card";
+            a.innerHTML = `
+                <img src="${artist.image || 'assets/default-art.png'}" />
+                <div class="artist-info">
+                    <strong>${escapeHtml(artist.name)}</strong>
+                    <span>${(artist.followers || 0).toLocaleString()} followers</span>
+                </div>
+            `;
+            a.onclick = async () => {
+                target.innerHTML = `<div class="search-section" style="padding: 40px; text-align: center; color: var(--text-muted);"><div class="spinner"></div><br><br><h3>> Loading Discography: ${escapeHtml(artist.name)}...</h3></div>`;
+                try {
+                    const res = await runSpotifySearch(artist.url);
+                    renderSpotifySearchResults(res, target, "");
+                } catch (err) {
+                    target.innerHTML = `<div class="search-section"><h3 style="color:var(--error)">Failed to load artist: ${err.message}</h3></div>`;
+                }
+            };
+            artistGrid.appendChild(a);
+        });
+        target.appendChild(artistGrid);
+
+        if (!document.getElementById("artist-style")) {
+            const style = document.createElement("style");
+            style.id = "artist-style";
+            style.innerHTML = `
+                .artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 15px; margin-bottom: 25px; }
+                .artist-card { background: #1a1a1a; padding: 12px; border-radius: 8px; cursor: pointer; transition: 0.2s; text-align: center; border: 1px solid #333; }
+                .artist-card:hover { background: #2a2a2a; transform: translateY(-3px); border-color: var(--primary-color); }
+                .artist-card img { width: 100px; height: 100px; border-radius: 50%; object-fit: cover; margin-bottom: 10px; }
+                .artist-info strong { display: block; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #fff; margin-bottom: 4px; }
+                .artist-info span { font-size: 12px; color: #aaa; }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
     const songs = (data.tracks || []).map(mapSpotifyTrack);
     if (data.playlist_match) {
         const pl = data.playlist_match;
@@ -880,6 +1275,14 @@ function renderSpotifySearchResults(
         g.className = "song-grid";
         target.appendChild(g);
         renderSongGrid((pl.tracks || []).map(mapSpotifyTrack), g);
+    }
+
+    if (!songs.length) {
+        if (!(data.artists && data.artists.length > 0)) {
+            target.innerHTML =
+                '<span class="loading-text">No Spotify results found.</span>';
+        }
+        return;
     }
 
     const block = document.createElement("div");
@@ -899,45 +1302,53 @@ function setupSearch() {
         const query = searchInput.value.trim();
         if (!query) return;
 
+        await refreshApiStatus();
         navs.search.click();
         searchResultsList.innerHTML =
             '<span class="loading-text">Searching...</span>';
 
         try {
             if (isSpotifyQuery(query)) {
+                if (!apiStatus.spotify_configured) {
+                    throw new Error(
+                        "Spotify is not configured. Add Client ID and Secret in Settings.",
+                    );
+                }
                 const data = await runSpotifySearch(query);
                 if (data.error) throw new Error(data.error);
                 renderSpotifySearchResults(data);
                 return;
             }
 
-            const sections = [];
-            try {
-                const spotData = await runSpotifySearch(query);
-                if (!spotData.error)
-                    sections.push({ label: "Spotify", data: spotData });
-            } catch (spotErr) {
-                console.warn("Spotify search unavailable:", spotErr);
+            if (!apiStatus.spotify_configured && !apiStatus.lastfm_configured) {
+                throw new Error(
+                    "No music API configured. Add Last.fm and/or Spotify credentials in Settings.",
+                );
             }
 
-            const raw = await invoke("fetch_lastfm", {
-                method: "track.search",
-                extraParams: `&track=${encodeURIComponent(query)}&limit=20`,
-            });
-            const lastData = JSON.parse(raw);
-            const tracks = lastData.results?.trackmatches?.track;
-            if (tracks) {
-                const list = Array.isArray(tracks) ? tracks : [tracks];
-                sections.push({
-                    label: "Last.fm",
-                    songs: list.map((t) => ({
-                        title: t.name,
-                        artist: t.artist,
-                        album: null,
-                        image: extractImageFromLastFmTrack(t),
-                        images: parseImagesFromLastFm(t.image),
-                    })),
-                });
+            const sections = [];
+
+            if (apiStatus.spotify_configured) {
+                try {
+                    const spotData = await runSpotifySearch(query);
+                    if (hasSpotifyResults(spotData)) {
+                        sections.push({ label: "Spotify", data: spotData });
+                    }
+                } catch (spotErr) {
+                    console.warn("Spotify search failed:", spotErr);
+                }
+            }
+
+            if (apiStatus.lastfm_configured) {
+                try {
+                    const lastSongs = await searchLastFmTracks(query);
+                    if (lastSongs.length) {
+                        sections.push({ label: "Last.fm", songs: lastSongs });
+                    }
+                } catch (lastErr) {
+                    if (!sections.length) throw lastErr;
+                    console.warn("Last.fm search failed:", lastErr);
+                }
             }
 
             if (!sections.length) {
@@ -1183,10 +1594,8 @@ function highlightSelected(element) {
 async function selectSong(song, element) {
     highlightSelected(element);
     currentSong = song;
-    await setNowPlaying(song);
     await showDetailSidebarPreview(song);
     fetchAndShowMetadata(song);
-    updateNowPlayingDownloadBadge(song);
 }
 
 async function selectAndPlaySong(song, element) {
@@ -1403,29 +1812,62 @@ async function downloadSongWithMetadata(song) {
 
 function setupContextMenu() {
     document.getElementById("cm-queue").addEventListener("click", () => {
-        if (selectedSong) console.log("Added to queue:", selectedSong.title);
+        if (selectedSong) {
+            appQueue.push(selectedSong);
+            renderQueueUI();
+            statusBar.textContent = `Added to Queue: ${selectedSong.title}`;
+        }
     });
-    document
-        .getElementById("cm-playlist")
-        .addEventListener("click", async () => {
-            if (!selectedSong) return;
-            const pls = getPlaylists();
-            if (!pls.length) {
-                const name = prompt("New playlist name:");
-                if (!name) return;
-                const pl = await createPlaylist(name);
-                await addTrackToPlaylist(pl.id, selectedSong);
-                renderPlaylistSidebar();
-                return;
-            }
-            const names = pls.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
-            const pick = prompt(`Add to playlist (number):\n${names}`);
-            const idx = Number(pick) - 1;
-            if (idx >= 0 && idx < pls.length) {
-                await addTrackToPlaylist(pls[idx].id, selectedSong);
-                statusBar.textContent = `Added to ${pls[idx].name}`;
-            }
-        });
+    document.getElementById("cm-playlist").addEventListener("click", () => {
+        if (!selectedSong) return;
+        const pls = getPlaylists();
+
+        if (!pls.length) {
+            showModal(
+                "Create Playlist",
+                `<p>No playlists exist yet.</p><input type="text" id="modal-playlist-name" placeholder="New playlist name..." autocomplete="off">`,
+                async () => {
+                    const name = document
+                        .getElementById("modal-playlist-name")
+                        .value.trim();
+                    if (!name) return false;
+                    const pl = await createPlaylist(name);
+                    await addTrackToPlaylist(pl.id, selectedSong);
+                    renderPlaylistSidebar();
+                    statusBar.textContent = `Added to ${pl.name}`;
+                },
+                "Create & Add",
+            );
+            setTimeout(
+                () => document.getElementById("modal-playlist-name")?.focus(),
+                50,
+            );
+            return;
+        }
+
+        const options = pls
+            .map(
+                (p) =>
+                    `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`,
+            )
+            .join("");
+        showModal(
+            "Add to Playlist",
+            `<p>Select a playlist for <strong>${escapeHtml(selectedSong.title)}</strong>:</p>
+                 <select id="modal-playlist-select">${options}</select>`,
+            async () => {
+                const select = document.getElementById("modal-playlist-select");
+                const plId = select.value;
+                const pl = getPlaylist(plId);
+                if (plId && pl) {
+                    await addTrackToPlaylist(plId, selectedSong);
+                    statusBar.textContent = `Added to ${pl.name}`;
+                    if (getActivePlaylistId() === plId) openPlaylistView(plId);
+                }
+            },
+            "Add",
+        );
+    });
     document
         .getElementById("cm-download")
         .addEventListener("click", async () => {
@@ -1463,24 +1905,38 @@ async function setNowPlaying(song) {
 }
 
 async function playSong(song) {
+    const playId = ++activePlayId;
     setBuffering(true);
     statusBar.textContent = `Buffering: ${song.title}...`;
 
     try {
         const query = `${song.title} ${song.artist}`;
-        const streamInfo = await invoke("stream_song", { query });
-        currentStreamData = streamInfo;
 
-        const audioBytes = await invoke("read_audio_file", {
-            path: streamInfo.file_path,
-        });
-        const blob = new Blob([new Uint8Array(audioBytes)], {
-            type: "audio/mp3",
-        });
-        const url = URL.createObjectURL(blob);
+        // Directly point the HTML5 audio element to our new Axum streaming backend
+        const streamUrl = `http://127.0.0.1:8000/stream?q=${encodeURIComponent(query)}`;
 
-        audioPlayer.src = url;
+        if (playId !== activePlayId) return;
+
+        currentStreamData = { file_path: streamUrl, file_name: song.title };
+
+        if (audioPlayer.src && audioPlayer.src.startsWith("blob:")) {
+            URL.revokeObjectURL(audioPlayer.src);
+        }
+
+        audioPlayer.src = streamUrl;
+
+        initAudioVisualizer();
+        if (audioContext && audioContext.state === "suspended") {
+            await audioContext.resume();
+        }
+
         await audioPlayer.play();
+
+        if (playId !== activePlayId) return;
+
+        await setNowPlaying(song);
+        updateNowPlayingDownloadBadge(song);
+
         isPlaying = true;
         btnPlay.textContent = "❚❚";
         statusBar.textContent = `Playing: ${song.title}`;
@@ -1496,10 +1952,13 @@ async function playSong(song) {
             }
         }
     } catch (err) {
+        if (playId !== activePlayId) return;
         console.error(err);
         statusBar.textContent = `Playback error: ${err}`;
     } finally {
-        setBuffering(false);
+        if (playId === activePlayId) {
+            setBuffering(false);
+        }
     }
 }
 
@@ -1552,11 +2011,26 @@ async function renderCollectionContent(songs) {
 function setupPlaylists() {
     document
         .getElementById("new-playlist-btn")
-        .addEventListener("click", async () => {
-            const name = prompt("Playlist name:");
-            if (!name?.trim()) return;
-            await createPlaylist(name.trim());
-            renderPlaylistSidebar();
+        .addEventListener("click", () => {
+            showModal(
+                "Create Playlist",
+                `<input type="text" id="modal-playlist-name" placeholder="Playlist name..." autocomplete="off">`,
+                async () => {
+                    const input = document.getElementById(
+                        "modal-playlist-name",
+                    );
+                    const name = input.value.trim();
+                    if (!name) return false;
+                    await createPlaylist(name);
+                    renderPlaylistSidebar();
+                },
+                "Create",
+            );
+            // Quick focus when modal loads
+            setTimeout(
+                () => document.getElementById("modal-playlist-name")?.focus(),
+                50,
+            );
         });
 
     document
@@ -1573,8 +2047,10 @@ function renderPlaylistSidebar() {
         li.className = pl.id === getActivePlaylistId() ? "active" : "";
         const label = document.createElement("span");
         label.textContent = pl.name;
-        label.style.cursor = "pointer";
-        label.addEventListener("click", () => openPlaylistView(pl.id));
+
+        // Add click listener to the entire list item for better hit area
+        li.style.cursor = "pointer";
+        li.addEventListener("click", () => openPlaylistView(pl.id));
 
         const del = document.createElement("button");
         del.type = "button";
@@ -1695,3 +2171,157 @@ async function openPlaylistView(playlistId) {
         tbody.appendChild(tr);
     }
 }
+
+// Modal helper system
+function showModal(title, contentHtml, onConfirm, confirmText = "Confirm") {
+    const overlay = document.getElementById("modal-overlay");
+    const titleEl = document.getElementById("modal-title");
+    const bodyEl = document.getElementById("modal-body");
+    const cancelBtn = document.getElementById("modal-cancel-btn");
+    const confirmBtn = document.getElementById("modal-confirm-btn");
+
+    titleEl.textContent = title;
+    bodyEl.innerHTML = contentHtml;
+    confirmBtn.textContent = confirmText;
+
+    const cleanup = () => {
+        overlay.classList.add("hidden");
+        cancelBtn.replaceWith(cancelBtn.cloneNode(true));
+        confirmBtn.replaceWith(confirmBtn.cloneNode(true));
+    };
+
+    document
+        .getElementById("modal-cancel-btn")
+        .addEventListener("click", cleanup);
+
+    document
+        .getElementById("modal-confirm-btn")
+        .addEventListener("click", async () => {
+            const result = await onConfirm();
+            if (result !== false) cleanup();
+        });
+
+    overlay.classList.remove("hidden");
+}
+
+// Download Management View
+async function initDownloadsView() {
+    await updateCacheUsage();
+    await renderDownloadsList();
+}
+
+async function updateCacheUsage() {
+    try {
+        const sizeBytes = await invoke("get_cache_size");
+        const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(2);
+        document.getElementById("cache-usage-text").textContent =
+            `Current Cache Size: ${sizeMb} MB`;
+    } catch (err) {
+        document.getElementById("cache-usage-text").textContent =
+            `Cache Size: Error (${err})`;
+    }
+}
+
+document
+    .getElementById("btn-clear-cache")
+    ?.addEventListener("click", async () => {
+        if (
+            !confirm(
+                "Are you sure you want to empty the audio and art cache? This may force redownloading on repeated streaming.",
+            )
+        )
+            return;
+        try {
+            await invoke("clear_cache");
+            await updateCacheUsage();
+            statusBar.textContent = "Cache cleared!";
+        } catch (err) {
+            statusBar.textContent = `Clear cache failed: ${err}`;
+        }
+    });
+
+let _allDownloadsCache = {};
+
+async function renderDownloadsList(searchQuery = "") {
+    const tbody = document.getElementById("downloads-tracks-body");
+    if (!tbody) return;
+    tbody.innerHTML = "<tr><td colspan='3'>Loading...</td></tr>";
+
+    try {
+        const index = await invoke("get_download_index");
+        _allDownloadsCache = index;
+
+        let keys = Object.keys(index);
+
+        if (searchQuery) {
+            const q = searchQuery.toLowerCase();
+            keys = keys.filter(
+                (k) =>
+                    k.toLowerCase().includes(q) ||
+                    index[k].toLowerCase().includes(q),
+            );
+        }
+
+        tbody.innerHTML = "";
+
+        if (keys.length === 0) {
+            tbody.innerHTML =
+                "<tr><td colspan='3' style='text-align:center;'>No downloads found.</td></tr>";
+            return;
+        }
+
+        for (const key of keys) {
+            const filename = index[key];
+            const parts = key.split("|");
+            const artist = parts[0] || "Unknown";
+            const title = parts[1] || "Unknown";
+
+            const tr = document.createElement("tr");
+
+            // Title & Artist
+            const titleTd = document.createElement("td");
+            titleTd.className = "col-title";
+            titleTd.innerHTML = `<div><span style="font-weight:600;">${escapeHtml(title)}</span><br><span style="color:#aaa; font-size: 0.9em;">${escapeHtml(artist)}</span></div>`;
+
+            // Filename
+            const fileTd = document.createElement("td");
+            fileTd.className = "col-album";
+            fileTd.innerHTML = `<span style="font-family:monospace; color:#888;">${escapeHtml(filename)}</span>`;
+
+            // Action
+            const actTd = document.createElement("td");
+            actTd.className = "col-actions";
+            const delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "pl-del-btn";
+            delBtn.style.position = "static"; // override absolute positioning if any
+            delBtn.textContent = "Remove";
+            delBtn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (confirm(`Delete ${filename}?`)) {
+                    try {
+                        await invoke("delete_downloaded_song", { key });
+                        downloadedTrackKeys.delete(key);
+                        await renderDownloadsList(
+                            document.getElementById("downloads-search").value,
+                        );
+                    } catch (err) {
+                        alert(`Failed to delete: ${err}`);
+                    }
+                }
+            });
+            actTd.appendChild(delBtn);
+
+            tr.appendChild(titleTd);
+            tr.appendChild(fileTd);
+            tr.appendChild(actTd);
+            tbody.appendChild(tr);
+        }
+    } catch (err) {
+        tbody.innerHTML = `<tr><td colspan='3' style='color:red;'>Error loading downloads: ${err}</td></tr>`;
+    }
+}
+
+document.getElementById("downloads-search")?.addEventListener("input", (e) => {
+    renderDownloadsList(e.target.value);
+});

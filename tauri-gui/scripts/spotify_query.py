@@ -50,6 +50,16 @@ def album_result(album) -> dict:
     }
 
 
+def artist_result(artist) -> dict:
+    return {
+        "type": "artist",
+        "name": artist.name,
+        "url": artist.url,
+        "genres": artist.genres,
+        "albums": [album_result(a) for a in artist.albums] if hasattr(artist, "albums") else [],
+        "tracks": [song_to_dict(s) for s in artist.songs],
+    }
+
 def init_spotify() -> None:
     from spotdl.utils.spotify import SpotifyClient
 
@@ -72,6 +82,7 @@ def resolve_query(query: str) -> dict:
     from spotdl.types.album import Album
     from spotdl.types.playlist import Playlist
     from spotdl.types.song import Song
+    from spotdl.types.artist import Artist
     from spotdl.utils.search import get_simple_songs
 
     q = query.strip()
@@ -79,13 +90,16 @@ def resolve_query(query: str) -> dict:
         raise ValueError("Empty query")
 
     # Spotify URL
-    if "open.spotify.com" in q or "spotify.link" in q:
+    if "open.spotify.com" in q or "spotify.link" in q or q.startswith("spotify:"):
         if "playlist" in q:
             pl = Playlist.from_url(q, fetch_songs=True)
             return playlist_result(pl)
         if "album" in q:
             alb = Album.from_url(q, fetch_songs=True)
             return album_result(alb)
+        if "artist" in q:
+            artist = Artist.from_url(q)
+            return artist_result(artist)
         if "track" in q:
             song = Song.from_url(q)
             return {"type": "tracks", "tracks": [song_to_dict(song)]}
@@ -103,16 +117,27 @@ def resolve_query(query: str) -> dict:
         alb = Album.from_search_term(q, fetch_songs=True)
         return album_result(alb)
 
-    # Text: Spotify track search + try playlist name match
+    # Text: Spotify track search (removed automatic playlist fetch to optimize execution time)
     tracks = Song.list_from_search_term(q)
     result = {
-        "type": "tracks",
+        "type": "search_results",
         "tracks": [song_to_dict(s) for s in tracks],
+        "artists": []
     }
 
     try:
-        pl = Playlist.from_search_term(f"playlist:{q}", fetch_songs=True)
-        result["playlist_match"] = playlist_result(pl)
+        from spotdl.utils.spotify import SpotifyClient
+        spotify = SpotifyClient()
+        artist_res = spotify.search(q, type="artist", limit=4)
+        if artist_res and "artists" in artist_res:
+            for item in artist_res["artists"]["items"]:
+                result["artists"].append({
+                    "name": item["name"],
+                    "url": item["external_urls"]["spotify"],
+                    "id": item["id"],
+                    "image": item["images"][0]["url"] if item["images"] else "",
+                    "followers": item["followers"]["total"] if "followers" in item else 0,
+                })
     except Exception:
         pass
 

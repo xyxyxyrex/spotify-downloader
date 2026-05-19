@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tauri-gui",
+  "productName": "SpotDL GUI",
   "version": "0.1.0",
   "identifier": "com.admin.tauri-gui",
   "build": {
@@ -10,9 +10,11 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "tauri-gui",
+        "label": "main",
+        "title": "SpotDL GUI",
         "width": 1100,
-        "height": 720
+        "height": 720,
+        "decorations": false
       }
     ],
     "security": {
