@@ -160,7 +160,8 @@ const PALETTE = [
 ];
 
 function buildHomeCollections(geoCountry) {
-    const country = (geoCountry && String(geoCountry).trim()) || "United States";
+    const country =
+        (geoCountry && String(geoCountry).trim()) || "United States";
     const countryEnc = encodeURIComponent(country);
     /** Each entry is a browse *group* (opens to tracks or albums). */
     return [
@@ -223,15 +224,9 @@ function buildHomeCollections(geoCountry) {
             subtitle: "Tag chart · 50 tracks",
             type: "tracks",
             load: () =>
-                fetchChartTracks(
-                    "tag.gettoptracks",
-                    "&tag=hip-hop&limit=50",
-                ),
+                fetchChartTracks("tag.gettoptracks", "&tag=hip-hop&limit=50"),
             preview: () =>
-                fetchChartTracks(
-                    "tag.gettoptracks",
-                    "&tag=hip-hop&limit=1",
-                ),
+                fetchChartTracks("tag.gettoptracks", "&tag=hip-hop&limit=1"),
         },
         {
             id: "top-electronic-tracks",
@@ -245,10 +240,7 @@ function buildHomeCollections(geoCountry) {
                     "&tag=electronic&limit=50",
                 ),
             preview: () =>
-                fetchChartTracks(
-                    "tag.gettoptracks",
-                    "&tag=electronic&limit=1",
-                ),
+                fetchChartTracks("tag.gettoptracks", "&tag=electronic&limit=1"),
         },
         {
             id: "top-albums-pop",
@@ -376,7 +368,10 @@ function buildHomeCollections(geoCountry) {
             subtitle: "Tag chart · 50 albums",
             type: "albums",
             load: () =>
-                fetchChartAlbums("tag.gettopalbums", "&tag=electronic&limit=50"),
+                fetchChartAlbums(
+                    "tag.gettopalbums",
+                    "&tag=electronic&limit=50",
+                ),
             preview: () =>
                 fetchChartAlbums("tag.gettopalbums", "&tag=electronic&limit=1"),
         },
@@ -548,19 +543,23 @@ function renderQueueUI() {
         msg.style.display = "block";
         return;
     }
-    
+
     msg.style.display = "none";
-    
+
     appQueue.forEach((song, idx) => {
         const item = document.createElement("div");
+        item.className = "song-item";
         item.style.display = "flex";
         item.style.alignItems = "center";
         item.style.justifyContent = "space-between";
         item.style.padding = "10px";
-        item.style.background = idx === queueIndex ? "var(--accent-hover)" : "#222";
+        item.style.background =
+            idx === queueIndex ? "var(--accent-hover)" : "#222";
         item.style.borderRadius = "6px";
         item.style.cursor = "pointer";
         item.draggable = true;
+
+        applyDownloadedState(item, song);
 
         const info = document.createElement("div");
         const titleStrong = document.createElement("strong");
@@ -574,7 +573,7 @@ function renderQueueUI() {
         info.appendChild(titleStrong);
         info.appendChild(document.createElement("br"));
         info.appendChild(artistWrap);
-        
+
         info.onclick = () => {
             queueIndex = idx;
             renderQueueUI();
@@ -594,8 +593,13 @@ function renderQueueUI() {
         };
 
         // Drag/Drop hooks
-        item.ondragstart = (e) => { e.dataTransfer.setData("text/plain", idx); item.style.opacity = "0.5"; };
-        item.ondragend = () => { item.style.opacity = "1"; };
+        item.ondragstart = (e) => {
+            e.dataTransfer.setData("text/plain", idx);
+            item.style.opacity = "0.5";
+        };
+        item.ondragend = () => {
+            item.style.opacity = "1";
+        };
         item.ondragover = (e) => e.preventDefault();
         item.ondrop = (e) => {
             e.preventDefault();
@@ -605,8 +609,10 @@ function renderQueueUI() {
                 appQueue.splice(idx, 0, moved);
                 // Adjust active index
                 if (queueIndex === fromIdx) queueIndex = idx;
-                else if (queueIndex > fromIdx && queueIndex <= idx) queueIndex--;
-                else if (queueIndex < fromIdx && queueIndex >= idx) queueIndex++;
+                else if (queueIndex > fromIdx && queueIndex <= idx)
+                    queueIndex--;
+                else if (queueIndex < fromIdx && queueIndex >= idx)
+                    queueIndex++;
                 renderQueueUI();
             }
         };
@@ -800,9 +806,7 @@ function updateLikeButton() {
     const liked = isSongLiked(currentSong);
     npLikeBtn.classList.toggle("liked", liked);
     npLikeBtn.textContent = liked ? "♥" : "♡";
-    npLikeBtn.title = liked
-        ? "Remove from Liked Songs"
-        : "Save to Liked Songs";
+    npLikeBtn.title = liked ? "Remove from Liked Songs" : "Save to Liked Songs";
 }
 
 function refreshContextMenuForSong(song) {
@@ -951,9 +955,11 @@ function restoreBrowseContext() {
 }
 
 function setupEntityPages() {
-    document.getElementById("artist-back-btn")?.addEventListener("click", () => {
-        restoreBrowseContext();
-    });
+    document
+        .getElementById("artist-back-btn")
+        ?.addEventListener("click", () => {
+            restoreBrowseContext();
+        });
     document.getElementById("album-back-btn")?.addEventListener("click", () => {
         restoreBrowseContext();
     });
@@ -1030,7 +1036,10 @@ async function openArtistPage(artistName, opts = {}) {
                     return;
                 }
             } catch (spotifyErr) {
-                console.warn("Spotify artist load failed, trying Last.fm:", spotifyErr);
+                console.warn(
+                    "Spotify artist load failed, trying Last.fm:",
+                    spotifyErr,
+                );
             }
         }
         await renderArtistPageFromLastFm(name, {
@@ -1050,17 +1059,12 @@ async function openArtistPage(artistName, opts = {}) {
 async function renderArtistPageFromSpotify(data, ctx) {
     const genres = (data.genres || []).slice(0, 4).join(" · ");
     const albumCount = data.albums?.length || 0;
-    ctx.metaEl.textContent = [
-        genres,
-        albumCount ? `${albumCount} albums` : "",
-    ]
+    ctx.metaEl.textContent = [genres, albumCount ? `${albumCount} albums` : ""]
         .filter(Boolean)
         .join(" · ");
 
     const heroImage =
-        data.albums?.[0]?.cover_url ||
-        data.tracks?.[0]?.image ||
-        null;
+        data.albums?.[0]?.cover_url || data.tracks?.[0]?.image || null;
     ctx.artEl.innerHTML = "";
     if (heroImage && isValidImage(heroImage)) {
         const img = document.createElement("img");
@@ -1145,7 +1149,8 @@ async function renderArtistPageFromLastFm(name, ctx) {
     }
 
     const tracksData = JSON.parse(tracksRaw);
-    if (tracksData.error) throw new Error(tracksData.message || "Last.fm error");
+    if (tracksData.error)
+        throw new Error(tracksData.message || "Last.fm error");
     const trackItems = tracksData.toptracks?.track;
     const trackList = trackItems
         ? Array.isArray(trackItems)
@@ -1169,7 +1174,8 @@ async function renderArtistPageFromLastFm(name, ctx) {
     }
 
     const albumsData = JSON.parse(albumsRaw);
-    if (albumsData.error) throw new Error(albumsData.message || "Last.fm error");
+    if (albumsData.error)
+        throw new Error(albumsData.message || "Last.fm error");
     const albumItems = albumsData.topalbums?.album;
     const albumList = albumItems
         ? Array.isArray(albumItems)
@@ -1246,9 +1252,7 @@ async function openAlbumPage(albumTitle, artistName, opts = {}) {
 async function renderAlbumPageFromSpotify(data, ctx) {
     ctx.metaEl.textContent = `${(data.tracks || []).length} tracks`;
     ctx.artistEl.replaceChildren(
-        data.artist
-            ? artistLinkEl(data.artist)
-            : document.createTextNode("—"),
+        data.artist ? artistLinkEl(data.artist) : document.createTextNode("—"),
     );
 
     const cover = data.cover_url || data.tracks?.[0]?.image;
@@ -1289,7 +1293,9 @@ async function renderAlbumPageFromLastFm(title, artist, ctx) {
     const album = data.album || {};
     const playcount = album.playcount;
     ctx.metaEl.textContent = [
-        album.wiki?.published ? `Released ${album.wiki.published.split(",")[0]}` : "",
+        album.wiki?.published
+            ? `Released ${album.wiki.published.split(",")[0]}`
+            : "",
         playcount ? `${Number(playcount).toLocaleString()} plays` : "",
     ]
         .filter(Boolean)
@@ -1627,7 +1633,9 @@ function initAudioVisualizer() {
 
     try {
         if (!audioContext) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            audioContext = new (
+                window.AudioContext || window.webkitAudioContext
+            )();
             analyser = audioContext.createAnalyser();
             const source = audioContext.createMediaElementSource(audioPlayer);
             source.connect(analyser);
@@ -1657,7 +1665,12 @@ function initAudioVisualizer() {
             for (let i = 0; i < 15; i++) {
                 const barHeight = (dataArray[i] / 255) * vizCanvas.height;
                 ctx.fillStyle = "#0f0";
-                ctx.fillRect(x, vizCanvas.height - barHeight, barWidth, barHeight);
+                ctx.fillRect(
+                    x,
+                    vizCanvas.height - barHeight,
+                    barWidth,
+                    barHeight,
+                );
                 x += barWidth + 1;
             }
         }
@@ -1706,9 +1719,7 @@ function createPlaylistHomeCard(pl) {
             }
         });
     } else {
-        artEl.appendChild(
-            generateThumbnail(pl.name, `${count} tracks`, 168),
-        );
+        artEl.appendChild(generateThumbnail(pl.name, `${count} tracks`, 168));
     }
     card.addEventListener("click", () => openPlaylistView(pl.id));
     return card;
@@ -2155,7 +2166,11 @@ function hasSpotifyResults(data) {
     if (data.tracks?.length) return true;
     if (data.artists?.length) return true;
     if (data.albums?.length) return true;
-    if (data.type === "playlist" || data.type === "album" || data.type === "artist")
+    if (
+        data.type === "playlist" ||
+        data.type === "album" ||
+        data.type === "artist"
+    )
         return true;
     return false;
 }
@@ -2338,7 +2353,6 @@ async function renderSpotifySearchResults(
 
     target.innerHTML =
         '<span class="loading-text">No Spotify results found.</span>';
-
 }
 
 function setupSearch() {
@@ -3256,6 +3270,9 @@ async function openPlaylistView(playlistId) {
         const artistLine = document.createElement("span");
         artistLine.className = "playlist-track-artist";
         artistLine.appendChild(artistLinkEl(track.artist));
+
+        applyDownloadedState(artWrap, song);
+
         textWrap.appendChild(titleLine);
         textWrap.appendChild(document.createElement("br"));
         textWrap.appendChild(artistLine);

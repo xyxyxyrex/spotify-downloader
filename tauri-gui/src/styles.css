@@ -1104,6 +1104,7 @@ h2 {
     height: 40px;
     border-radius: 4px;
     overflow: hidden;
+    position: relative;
     display: inline-block;
     vertical-align: middle;
     margin-right: 10px;
@@ -1348,7 +1349,8 @@ h2 {
 }
 
 .song-tile.downloaded::after,
-.song-item.downloaded::after {
+.song-item.downloaded::after,
+.playlist-track-art.downloaded::after {
     content: "DL";
     position: absolute;
     top: 6px;
@@ -1359,6 +1361,14 @@ h2 {
     border: 1px solid var(--accent);
     color: var(--accent);
     border-radius: 2px;
+    z-index: 10;
+}
+
+.playlist-track-art.downloaded::after {
+    top: 2px;
+    left: 2px;
+    font-size: 7px;
+    padding: 1px 2px;
 }
 
 .song-tile {
