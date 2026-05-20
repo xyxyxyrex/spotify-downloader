@@ -4,8 +4,8 @@
   "pub_date": "2026-05-20T15:15:00+08:00",
   "platforms": {
     "windows-x86_64": {
-      "signature": "PASTE_THE_CONTENT_OF_THE_ZIP_SIG_FILE_HERE",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.4/SpotDL-GUI-setup.nsis.zip"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MGh4aVBmWWpTZlpJZTh2WWx0cVljMStlOVUycU5ybGJPU2p3dElhQW1GRkdvOUhjdjZtQTVVaUw3R0hPU0RQcklKaGtGdDlGVXRFNHI1MDFrampVcFEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5MjYyODQ3CWZpbGU6U3BvdERMIEdVSV8wLjIuNF94NjQtc2V0dXAuZXhlCitKT25rbmpkRkIyRGRGUzU3K2ZlRTZpSVVJS2UzYXI5cGE3d2pXZWQ2Nk1SOWFGU3ZVVEt3dm1YWGY1MmxKTTJMcko2YjdSK1JrdE5JYjZ2MTN5QkRnPT0K",
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.4/SpotDL.GUI_0.2.4_x64-setup.exe"
     }
   }
 }
