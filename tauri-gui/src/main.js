@@ -6182,7 +6182,34 @@ function showModal(title, contentHtml, onConfirm, confirmText = "Confirm", showC
 async function initDownloadsView() {
     await refreshDownloadedKeys();
     await updateCacheUsage();
+    await updateDownloadsUsage();
     await renderDownloadsList();
+}
+
+function formatBytes(bytes, decimals = 2) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
+async function updateDownloadsUsage() {
+    try {
+        const info = await invoke("get_downloads_info");
+        const totalSizeStr = formatBytes(info.total_size_bytes);
+        const el = document.getElementById("downloads-usage-text");
+        if (el) {
+            el.textContent = `Total Size: ${totalSizeStr}`;
+        }
+    } catch (err) {
+        console.error("Failed to update downloads usage:", err);
+        const el = document.getElementById("downloads-usage-text");
+        if (el) {
+            el.textContent = `Total Size: Error (${err})`;
+        }
+    }
 }
 
 async function updateCacheUsage() {
@@ -6196,6 +6223,16 @@ async function updateCacheUsage() {
             `Cache Size: Error (${err})`;
     }
 }
+
+document
+    .getElementById("btn-open-downloads-dir")
+    ?.addEventListener("click", async () => {
+        try {
+            await invoke("open_downloads_directory");
+        } catch (err) {
+            statusBar.textContent = `Failed to open directory: ${err}`;
+        }
+    });
 
 document
     .getElementById("btn-clear-cache")
@@ -6228,6 +6265,7 @@ document
                 try {
                     await invoke("delete_all_downloads");
                     await refreshDownloadedKeys();
+                    await updateDownloadsUsage();
                     if (views.downloads && !views.downloads.classList.contains("hidden")) {
                         await renderDownloadsList(downloadsSearchQuery);
                     }
@@ -6262,8 +6300,23 @@ async function renderDownloadsList(searchQuery = "") {
     renderDownloadsActivity();
 
     try {
-        const index = await invoke("get_download_index");
+        const info = await invoke("get_downloads_info");
+        
+        // Re-construct index and build sizesMap
+        const index = {};
+        const sizesMap = {};
+        for (const item of info.items) {
+            index[item.key] = item.filename;
+            sizesMap[item.key] = item.size_bytes;
+        }
         _allDownloadsCache = index;
+
+        // Also update total downloads usage text on render
+        const totalSizeStr = formatBytes(info.total_size_bytes);
+        const el = document.getElementById("downloads-usage-text");
+        if (el) {
+            el.textContent = `Total Size: ${totalSizeStr}`;
+        }
 
         let keys = Object.keys(index).sort((a, b) => {
             const ta = (a.split("|")[1] || a).toLowerCase();
@@ -6314,10 +6367,22 @@ async function renderDownloadsList(searchQuery = "") {
 
             const fileTd = document.createElement("td");
             fileTd.className = "col-album";
+            
             const fileSpan = document.createElement("span");
             fileSpan.className = "downloads-filename";
             fileSpan.textContent = filename;
+            
+            const sizeSpan = document.createElement("span");
+            sizeSpan.className = "downloads-filesize";
+            sizeSpan.style.display = "block";
+            sizeSpan.style.fontSize = "11px";
+            sizeSpan.style.color = "var(--fg-muted)";
+            sizeSpan.style.marginTop = "2px";
+            const sizeBytes = sizesMap[key] || 0;
+            sizeSpan.textContent = formatBytes(sizeBytes);
+            
             fileTd.appendChild(fileSpan);
+            fileTd.appendChild(sizeSpan);
 
             const actTd = document.createElement("td");
             actTd.className = "col-actions";
@@ -6336,6 +6401,7 @@ async function renderDownloadsList(searchQuery = "") {
                             await invoke("delete_downloaded_song", { key });
                             downloadedKeys.delete(key);
                             await refreshDownloadedKeys();
+                            await updateDownloadsUsage();
                             await renderDownloadsList(
                                 document.getElementById("downloads-search").value,
                             );

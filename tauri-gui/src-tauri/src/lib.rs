@@ -1286,6 +1286,81 @@ fn delete_all_downloads(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct DownloadItemInfo {
+    key: String,
+    filename: String,
+    size_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct DownloadsInfo {
+    total_size_bytes: u64,
+    items: Vec<DownloadItemInfo>,
+}
+
+#[tauri::command]
+fn get_downloads_info(state: State<'_, AppState>) -> Result<DownloadsInfo, String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let index = load_download_index(&settings);
+    let download_dir = resolve_download_dir(&settings);
+    
+    let mut items = Vec::new();
+    let mut total_size_bytes = 0;
+    
+    for (key, filename) in index {
+        let path = download_dir.join(&filename);
+        let size_bytes = if path.is_file() {
+            std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        total_size_bytes += size_bytes;
+        items.push(DownloadItemInfo {
+            key,
+            filename,
+            size_bytes,
+        });
+    }
+    
+    Ok(DownloadsInfo {
+        total_size_bytes,
+        items,
+    })
+}
+
+#[tauri::command]
+fn open_downloads_directory(state: State<'_, AppState>) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let download_dir = resolve_download_dir(&settings);
+    
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&download_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&download_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&download_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 struct DependencyStatus {
     python: bool,
@@ -1780,6 +1855,8 @@ pub fn run() {
             is_track_downloaded,
             get_downloaded_keys,
             get_download_index,
+            get_downloads_info,
+            open_downloads_directory,
             delete_downloaded_song,
             delete_all_downloads,
             check_system_dependencies,

@@ -563,30 +563,58 @@
                     <div id="view-downloads" class="view hidden">
                         <h2>> Downloads</h2>
                         <div class="downloads-panel">
-                            <section class="downloads-cache-card">
-                                <h3 class="downloads-section-title">
-                                    Cache Management
-                                </h3>
-                                <p
-                                    id="cache-usage-text"
-                                    class="downloads-cache-stat"
-                                >
-                                    Calculating cache size...
-                                </p>
-                                <p class="settings-hint">
-                                    Stream cache speeds up replay. Clearing it
-                                    does not remove saved downloads.
-                                </p>
-                                <div class="settings-actions downloads-actions">
-                                    <button
-                                        type="button"
-                                        id="btn-clear-cache"
-                                        class="btn-secondary btn-danger-outline"
+                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; margin-bottom: 8px;">
+                                <section class="downloads-cache-card" style="margin: 0;">
+                                    <h3 class="downloads-section-title">
+                                        Downloads Storage
+                                    </h3>
+                                    <p
+                                        id="downloads-usage-text"
+                                        class="downloads-cache-stat"
                                     >
-                                        Clear cache
-                                    </button>
-                                </div>
-                            </section>
+                                        Calculating downloads size...
+                                    </p>
+                                    <p class="settings-hint">
+                                        All offline tracks are saved here. You can open the directory or manage them below.
+                                    </p>
+                                    <div class="settings-actions downloads-actions" style="display: flex; gap: 10px;">
+                                        <button
+                                            type="button"
+                                            id="btn-open-downloads-dir"
+                                            class="btn-primary"
+                                            style="padding: 8px 16px; font-size: 0.85rem;"
+                                        >
+                                            Open Downloads Directory
+                                        </button>
+                                    </div>
+                                </section>
+
+                                <section class="downloads-cache-card" style="margin: 0;">
+                                    <h3 class="downloads-section-title">
+                                        Cache Management
+                                    </h3>
+                                    <p
+                                        id="cache-usage-text"
+                                        class="downloads-cache-stat"
+                                    >
+                                        Calculating cache size...
+                                    </p>
+                                    <p class="settings-hint">
+                                        Stream cache speeds up replay. Clearing it
+                                        does not remove saved downloads.
+                                    </p>
+                                    <div class="settings-actions downloads-actions">
+                                        <button
+                                            type="button"
+                                            id="btn-clear-cache"
+                                            class="btn-secondary btn-danger-outline"
+                                            style="padding: 8px 16px; font-size: 0.85rem;"
+                                        >
+                                            Clear cache
+                                        </button>
+                                    </div>
+                                </section>
+                            </div>
 
                             <section
                                 id="downloads-active-card"
