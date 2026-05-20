@@ -428,6 +428,8 @@ def resolve_query(query: str) -> dict:
 
     # Spotify URL
     if "open.spotify.com" in q or "spotify.link" in q or q.startswith("spotify:"):
+        # Strip query parameters for clean resolution
+        q = q.split("?")[0].strip()
         if "playlist" in q:
             playlist_id = q.split("playlist/")[-1].split("?")[0].split(":")[-1] if "playlist/" in q else q.split(":")[-1]
             return _fetch_playlist_direct(playlist_id)

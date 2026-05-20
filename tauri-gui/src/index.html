@@ -76,13 +76,27 @@
 
             <div id="content-area">
                 <main id="main-content">
-                    <header id="main-header">
+                    <header id="main-header" style="position: relative; display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
                         <input
                             type="text"
                             id="search-input"
                             placeholder="Search artists, albums, tracks, or paste a Spotify URL..."
                             autocomplete="off"
+                            style="flex: 1; max-width: 400px;"
                         />
+                        <div id="home-filter-container" class="home-filter-container">
+                            <button type="button" class="filter-chip active" data-filter="all">All</button>
+                            <button type="button" class="filter-chip" data-filter="playlists">Your Playlists</button>
+                            <button type="button" class="filter-chip" data-filter="recent">Recently Played</button>
+                            <button type="button" class="filter-chip" data-filter="charts">Top 100 Charts</button>
+                        </div>
+                        <button type="button" id="nav-profile-btn" class="profile-header-btn" style="margin-left: auto; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 500px; padding: 6px 14px 6px 6px; cursor: pointer; color: var(--fg-main); font-family: monospace; font-size: 0.85rem; font-weight: 600; transition: all 0.2s ease;">
+                            <div id="profile-btn-avatar" style="width: 26px; height: 26px; border-radius: 50%; background: linear-gradient(135deg, #1db954, #191414); display: flex; align-items: center; justify-content: center; font-size: 0.75rem; color: #fff; font-weight: 700; text-transform: uppercase;">U</div>
+                            <span id="profile-btn-name">User</span>
+                        </button>
+                        <div id="search-progress-bar" class="search-progress-bar hidden">
+                            <div class="search-progress-line"></div>
+                        </div>
                     </header>
 
                     <div id="view-home" class="view">
@@ -92,28 +106,35 @@
                                 class="home-lastfm-hint hidden"
                                 role="status"
                             ></p>
-                            <section class="home-section">
+                            <section class="home-section" id="home-section-playlists">
                                 <h2>> Your playlists</h2>
                                 <div
                                     id="home-row-playlists"
                                     class="collection-row home-playlists-row"
                                 ></div>
                             </section>
-                            <section class="home-section">
+                            <section class="home-section" id="home-section-recent">
+                                <h2>> Recently Played</h2>
+                                <div
+                                    id="home-row-recent"
+                                    class="collection-row"
+                                ></div>
+                            </section>
+                            <section class="home-section" id="home-section-charts">
                                 <h2>> Top Charts</h2>
                                 <div
                                     id="home-row-charts"
                                     class="collection-row"
                                 ></div>
                             </section>
-                            <section class="home-section">
+                            <section class="home-section" id="home-section-tracks">
                                 <h2>> Genres &amp; tag charts</h2>
                                 <div
                                     id="home-row-tracks"
                                     class="collection-row"
                                 ></div>
                             </section>
-                            <section class="home-section">
+                            <section class="home-section" id="home-section-albums">
                                 <h2>> Album charts</h2>
                                 <div
                                     id="home-row-albums"
@@ -174,7 +195,7 @@
                     </div>
 
                     <div id="view-playlist" class="view hidden">
-                        <div class="playlist-view-header" style="display: flex; align-items: center; gap: 1rem;">
+                        <div class="playlist-view-header" style="display: flex; align-items: center; gap: 1.25rem;">
                             <button
                                 type="button"
                                 id="playlist-back-btn"
@@ -182,12 +203,13 @@
                             >
                                 &lt; Back
                             </button>
+                            <div id="playlist-view-art" class="playlist-header-art" style="width: 80px; height: 80px; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; box-shadow: 0 8px 24px rgba(0,0,0,0.3); background: var(--bg-card); flex-shrink: 0;"></div>
                             <div style="flex: 1;">
-                                <h2 id="playlist-view-title" style="margin: 0;">> Playlist</h2>
+                                <h2 id="playlist-view-title" style="margin: 0; font-size: 1.6rem; font-weight: 700;">> Playlist</h2>
                                 <p
                                     id="playlist-view-meta"
                                     class="collection-subtitle"
-                                    style="margin: 0;"
+                                    style="margin: 0; margin-top: 4px; font-family: inherit; font-size: 0.95rem; color: var(--fg-muted);"
                                 ></p>
                             </div>
                             <button type="button" id="playlist-rescan-btn" class="btn-secondary">
@@ -282,6 +304,75 @@
                                 class="song-grid"
                             ></div>
                         </section>
+                    </div>
+
+                    <div id="view-profile" class="view hidden">
+                        <!-- Customizable Profile Header -->
+                        <div class="profile-page-header" style="display: flex; align-items: center; gap: 20px; padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 20px; flex-wrap: wrap;">
+                            <div id="profile-avatar-large" class="profile-avatar-large" style="width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 2.2rem; color: #fff; font-weight: 700; text-transform: uppercase; flex-shrink: 0; font-family: monospace;">U</div>
+                            <div style="flex: 1; min-width: 250px;">
+                                <div style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="text" id="profile-name-input" value="User" placeholder="Enter name..." style="background: transparent; border: none; border-bottom: 1px solid transparent; font-size: 1.6rem; font-weight: 700; color: var(--fg-main); font-family: monospace; width: 100%; max-width: 320px; padding: 2px 4px; margin: 0; outline: none; transition: all 0.2s ease;" />
+                                    <button type="button" id="profile-edit-name-btn" class="btn-secondary" style="padding: 4px 10px; font-size: 0.75rem; font-family: monospace;">Edit</button>
+                                </div>
+                                <p style="margin: 4px 0 0 4px; font-size: 0.8rem; color: var(--fg-muted); font-family: monospace;">Local Explorer · Local-First Client</p>
+                            </div>
+                        </div>
+
+                        <!-- Statistics Summary Grid -->
+                        <div class="profile-stats-grid">
+                            <div class="profile-stat-box">
+                                <div id="stat-total-plays" class="profile-stat-val">0</div>
+                                <div class="profile-stat-lbl">Plays tracked</div>
+                            </div>
+                            <div class="profile-stat-box">
+                                <div id="stat-unique-artists" class="profile-stat-val">0</div>
+                                <div class="profile-stat-lbl">Unique Artists</div>
+                            </div>
+                            <div class="profile-stat-box">
+                                <div id="stat-unique-albums" class="profile-stat-val">0</div>
+                                <div class="profile-stat-lbl">Unique Albums</div>
+                            </div>
+                        </div>
+
+                        <!-- Time Range Chips Container -->
+                        <div class="profile-stats-tabs" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px dashed var(--border); padding-bottom: 16px;">
+                            <button type="button" class="profile-range-tab filter-chip active" data-range="today">Today</button>
+                            <button type="button" class="profile-range-tab filter-chip" data-range="week">This Week</button>
+                            <button type="button" class="profile-range-tab filter-chip" data-range="month">This Month</button>
+                            <button type="button" class="profile-range-tab filter-chip" data-range="year">This Year</button>
+                            <button type="button" class="profile-range-tab filter-chip" data-range="all">All Time</button>
+                        </div>
+
+                        <!-- Dynamic Metrics Grid Sections -->
+                        <div class="profile-sections-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px;">
+                            <!-- Top Tracks Column -->
+                            <div class="profile-section-card">
+                                <h3 class="profile-section-title">[ Top Tracks ]</h3>
+                                <div id="profile-top-tracks-list" style="display: flex; flex-direction: column; gap: 8px;">
+                                    <!-- Dynamic Track Elements -->
+                                </div>
+                            </div>
+
+                            <!-- Top Artists & Albums Column Container -->
+                            <div style="display: flex; flex-direction: column; gap: 20px;">
+                                <!-- Top Artists Column -->
+                                <div class="profile-section-card">
+                                    <h3 class="profile-section-title">[ Top Artists ]</h3>
+                                    <div id="profile-top-artists-list" style="display: flex; flex-direction: column; gap: 8px;">
+                                        <!-- Dynamic Artist Elements -->
+                                    </div>
+                                </div>
+
+                                <!-- Top Albums Column -->
+                                <div class="profile-section-card">
+                                    <h3 class="profile-section-title">[ Top Albums ]</h3>
+                                    <div id="profile-top-albums-list" style="display: flex; flex-direction: column; gap: 8px;">
+                                        <!-- Dynamic Album Elements -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div id="view-settings" class="view hidden">
@@ -420,45 +511,6 @@
                                     </button>
                                 </div>
                             </div>
-                            
-                            <div class="settings-row" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
-                                <h3 style="margin-bottom: 0.5rem; color: var(--fg); font-size: 1.1rem;">System Dependency Checker</h3>
-                                <p class="settings-hint" style="margin-bottom: 1.2rem;">Verify that your computer has the necessary tools installed for streaming and downloading music.</p>
-                                <div id="dependency-checker-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-bottom: 12px;">
-                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="text-align: left;">
-                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">Python 3</span>
-                                            <span id="dep-status-python-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
-                                        </div>
-                                        <span id="dep-status-python-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
-                                    </div>
-                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="text-align: left;">
-                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">yt-dlp (Stream & Download)</span>
-                                            <span id="dep-status-ytdlp-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
-                                        </div>
-                                        <span id="dep-status-ytdlp-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
-                                    </div>
-                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="text-align: left;">
-                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">spotDL Core</span>
-                                            <span id="dep-status-spotdl-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
-                                        </div>
-                                        <span id="dep-status-spotdl-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
-                                    </div>
-                                    <div class="dependency-check-card" style="padding: 12px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
-                                        <div style="text-align: left;">
-                                            <span style="font-weight: 600; display: block; font-size: 0.9rem;">syncedlyrics</span>
-                                            <span id="dep-status-lyrics-text" style="font-size: 0.78rem; color: var(--fg-muted);">Checking...</span>
-                                        </div>
-                                        <span id="dep-status-lyrics-icon" style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: #f1c40f; box-shadow: 0 0 8px #f1c40f;"></span>
-                                    </div>
-                                </div>
-                                <div style="display: flex; gap: 10px; align-items: center;">
-                                    <button type="button" class="btn-secondary" id="btn-recheck-dependencies" style="padding: 6px 12px; font-size: 0.85rem;">Check Status</button>
-                                    <p id="dependency-tip" style="margin: 0; font-size: 0.82rem; color: var(--fg-muted); text-align: left;"></p>
-                                </div>
-                            </div>
 
                             <div class="settings-row" style="margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 1.5rem;">
                                 <h3 style="margin-bottom: 1rem; color: var(--fg); font-size: 1.1rem;">Themes</h3>
@@ -470,6 +522,7 @@
                                         <option value="dracula">Dracula</option>
                                     </select>
                                     <button type="button" class="btn-secondary" id="btn-import-css">Import .css</button>
+                                    <button type="button" class="btn-secondary" id="btn-create-theme">Create your own theme!</button>
                                     <input type="file" id="css-file-input" accept=".css" style="display: none;" />
                                 </div>
                                 <p class="settings-hint">Or, you can input your own css code here!</p>
@@ -611,7 +664,7 @@
                     <!-- View: Queue -->
                     <div id="view-queue" class="view hidden">
                         <h2>> Play Queue</h2>
-                        <div class="settings-panel">
+                        <div class="queue-panel">
                             <div
                                 style="
                                     display: flex;
@@ -622,9 +675,11 @@
                                     margin-bottom: 20px;
                                 "
                             >
-                                <p style="margin: 0; color: #aaa">
-                                    Songs coming up next...
-                                </p>
+                                <div class="queue-header-meta">
+                                    <span style="color: var(--text-color); font-weight: 500;">Songs coming up next</span>
+                                    <span id="queue-meta-count" style="color: var(--text-muted); margin-left: 8px; font-size: 12.5px;">(0 songs)</span>
+                                    <span id="queue-meta-duration" class="queue-duration-badge" style="margin-left: 12px; display: none;">0:00 remaining</span>
+                                </div>
                                 <button
                                     class="btn-secondary"
                                     id="btn-clear-queue"
@@ -632,28 +687,56 @@
                                     Clear Queue
                                 </button>
                             </div>
-                            <div
-                                id="queue-empty-msg"
-                                style="
-                                    color: var(--text-muted);
-                                    text-align: center;
-                                    margin: 40px 0;
-                                "
-                            >
-                                The queue is empty. Start playing music or add
-                                tracks to see them here.
-                            </div>
+                            <div class="queue-layout-container">
+                                <!-- Left Column (Queue List) -->
+                                <div class="queue-left-column">
+                                    <div
+                                        id="queue-empty-msg"
+                                        style="
+                                            color: var(--text-muted);
+                                            text-align: center;
+                                            margin: 40px 0;
+                                        "
+                                    >
+                                        The queue is empty. Start playing music or add
+                                        tracks to see them here.
+                                    </div>
 
-                            <div
-                                id="queue-list"
-                                class="queue-list"
-                                style="
-                                    display: flex;
-                                    flex-direction: column;
-                                    gap: 4px;
-                                "
-                            >
-                                <!-- Queue items go here -->
+                                    <div
+                                        id="queue-list"
+                                        class="queue-list"
+                                    >
+                                        <!-- Queue items go here -->
+                                    </div>
+                                </div>
+
+                                <!-- Right Column (Side Panel: Actions & Recommendations) -->
+                                <div class="queue-right-column">
+                                    <div class="queue-side-card">
+                                        <h3 style="margin-top: 0; margin-bottom: 12px; font-size: 14px; font-weight: 600; color: #fff;">Queue Actions</h3>
+                                        <button class="btn-primary" id="btn-save-queue-playlist" style="width: 100%; padding: 10px 14px; font-size: 13px; font-weight: 600; border-radius: 20px; display: flex; align-items: center; justify-content: center; gap: 8px;">
+                                            Save queue as playlist
+                                        </button>
+                                    </div>
+
+                                    <div class="queue-side-card queue-recommendations-card">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                            <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: #fff;">Recommended Tracks</h3>
+                                            <button id="btn-refresh-queue-recs" class="btn-text-only" title="Refresh recommendations" style="background: transparent; border: none; color: var(--accent); cursor: pointer; font-size: 12px; font-weight: 500; padding: 0;">
+                                                ↻ Refresh
+                                            </button>
+                                        </div>
+                                        <div id="queue-recs-loading" style="color: var(--text-muted); font-size: 12px; padding: 12px 0; text-align: center; display: none;">
+                                            Finding similar tracks...
+                                        </div>
+                                        <div id="queue-recs-empty" style="color: var(--text-muted); font-size: 12px; padding: 12px 0; text-align: center;">
+                                            Add some songs to the queue to see recommendations.
+                                        </div>
+                                        <div id="queue-recs-list" class="queue-recs-list">
+                                            <!-- Recommendations go here -->
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -674,12 +757,20 @@
                             <p>Select a track to view details and lyrics.</p>
                         </div>
                         <div id="detail-content" class="hidden">
-                            <div id="detail-art-wrap" class="detail-art-wrap">
+                            <div id="detail-art-wrap" class="detail-art-wrap" style="position: relative;">
                                 <img id="detail-art" alt="Album art" />
                                 <canvas
                                     id="detail-art-canvas"
                                     class="hidden"
                                 ></canvas>
+                                <button
+                                    type="button"
+                                    id="detail-like-btn"
+                                    class="detail-like-btn"
+                                    title="Add to Liked Songs"
+                                >
+                                    ♡
+                                </button>
                             </div>
                             <h3 id="detail-title">—</h3>
                             <p id="detail-artist" class="detail-sub">—</p>
@@ -831,6 +922,16 @@
                                 value="85"
                             />
                         </div>
+                        <button
+                            id="btn-fullscreen-saver"
+                            class="player-fullscreen-btn"
+                            title="Fullscreen Screen Saver"
+                            aria-label="Fullscreen Screen Saver"
+                        >
+                            <svg class="player-fullscreen-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M5 9V5h4M15 5h4v4M5 15v4h4M15 19h4v-4" />
+                            </svg>
+                        </button>
                     </div>
                     <div
                         id="buffer-progress-wrap"
@@ -897,6 +998,39 @@
                     <button id="btn-import-selected" class="btn-primary hidden" disabled>Import Selected</button>
                 </div>
             </div>
+        </div>
+        <!-- Now Playing Fullscreen Screensaver -->
+        <div id="fullscreen-screensaver" class="screensaver-overlay hidden">
+            <div id="screensaver-bg" class="screensaver-bg"></div>
+            <div class="screensaver-content">
+                <div class="screensaver-left">
+                    <div id="screensaver-art-wrap" class="screensaver-art-wrap">
+                        <img id="screensaver-art" src="" alt="Album Art" />
+                    </div>
+                    <div class="screensaver-song-info">
+                        <h1 id="screensaver-title" class="screensaver-title">Song Title</h1>
+                        <h2 id="screensaver-artist" class="screensaver-artist">Artist Name</h2>
+                    </div>
+                </div>
+                <div class="screensaver-right">
+                    <div id="screensaver-clock" class="screensaver-clock">12:00:00</div>
+                    <div id="screensaver-date" class="screensaver-date">MM/DD/YY</div>
+                </div>
+            </div>
+            
+            <div class="screensaver-controls">
+                <button id="ss-btn-shuffle" class="ss-control-btn ss-toggle-btn" title="Shuffle off">⤮</button>
+                <button id="ss-btn-prev" class="ss-control-btn" title="Previous">⏮</button>
+                <button id="ss-btn-play" class="ss-control-btn ss-play-btn" title="Play/Pause">❚❚</button>
+                <button id="ss-btn-next" class="ss-control-btn" title="Next">⏭</button>
+                <button id="ss-btn-loop" class="ss-control-btn ss-toggle-btn" title="Repeat off">↻</button>
+                <div class="ss-volume-control">
+                    <span class="ss-vol-label">VOL</span>
+                    <input type="range" id="ss-volume-bar" min="0" max="100" value="85" />
+                </div>
+            </div>
+            
+            <div class="screensaver-close-hint">Press ESC or click anywhere to exit</div>
         </div>
     </body>
 </html>

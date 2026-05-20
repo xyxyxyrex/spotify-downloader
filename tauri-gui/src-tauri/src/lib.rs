@@ -11,6 +11,9 @@ use std::env;
 use tauri::{Manager, State};
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 const LASTFM_PLACEHOLDER: &str = "2a96cbd8b46e442fc41c2b86b821562f";
 
 #[derive(Serialize, Deserialize)]
@@ -124,6 +127,34 @@ static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 // ---------- Helpers ----------
 
+fn get_bundled_bin_dir() -> Option<PathBuf> {
+    let handle = APP_HANDLE.get()?;
+    
+    // Candidate 1: Standard flattened resource path
+    if let Ok(p) = handle.path().resolve("bin", tauri::path::BaseDirectory::Resource) {
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    
+    // Candidate 2: _up_/bin/ mapped resource path
+    if let Ok(p) = handle.path().resolve("_up_/bin", tauri::path::BaseDirectory::Resource) {
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+    
+    // Candidate 3: In development
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(manifest).join("../bin");
+        if p.is_dir() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
 fn get_bundled_bin_path(name: &str) -> Option<PathBuf> {
     let handle = APP_HANDLE.get()?;
     let filename = if cfg!(windows) {
@@ -131,11 +162,62 @@ fn get_bundled_bin_path(name: &str) -> Option<PathBuf> {
     } else {
         name.to_string()
     };
-    handle
-        .path()
-        .resolve(format!("bin/{}", filename), tauri::path::BaseDirectory::Resource)
-        .ok()
-        .filter(|p| p.is_file())
+    
+    // Candidate 1: Standard flattened resource path
+    if let Ok(p) = handle.path().resolve(format!("bin/{}", filename), tauri::path::BaseDirectory::Resource) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    
+    // Candidate 2: _up_/bin/ mapped resource path
+    if let Ok(p) = handle.path().resolve(format!("_up_/bin/{}", filename), tauri::path::BaseDirectory::Resource) {
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    
+    // Candidate 3: In development
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(manifest).join("../bin").join(&filename);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+fn configure_command_env(cmd: &mut std::process::Command) {
+    if let Some(bin_dir) = get_bundled_bin_dir() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        #[cfg(windows)]
+        let separator = ";";
+        #[cfg(not(windows))]
+        let separator = ":";
+        let new_path = format!("{}{}{}", bin_dir.to_str().unwrap(), separator, current_path);
+        cmd.env("PATH", new_path);
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+}
+
+fn configure_tokio_command_env(cmd: &mut tokio::process::Command) {
+    if let Some(bin_dir) = get_bundled_bin_dir() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        #[cfg(windows)]
+        let separator = ";";
+        #[cfg(not(windows))]
+        let separator = ":";
+        let new_path = format!("{}{}{}", bin_dir.to_str().unwrap(), separator, current_path);
+        cmd.env("PATH", new_path);
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
 }
 
 fn settings_file() -> PathBuf {
@@ -172,15 +254,56 @@ fn save_history(history: &std::collections::HashMap<String, TrackHistory>) -> Re
     Ok(())
 }
 
+fn default_cache_dir() -> PathBuf {
+    let mut path = dirs::cache_dir()
+        .or_else(dirs::data_local_dir)
+        .or_else(dirs::config_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    path.push("spotdl-gui");
+    path.push("cache");
+    path
+}
+
+fn default_download_dir() -> PathBuf {
+    let mut path = dirs::audio_dir()
+        .or_else(dirs::download_dir)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    
+    // If it's home_dir, or relative, let's push "Music" to keep it clean.
+    if path == PathBuf::from(".") || dirs::home_dir().map(|h| h == path).unwrap_or(false) {
+        path.push("Music");
+    }
+    path.push("SpotDL");
+    path
+}
+
 fn load_settings_from_disk() -> AppSettings {
     let path = settings_file();
-    if !path.exists() {
-        return AppSettings::default();
+    let mut settings = if !path.exists() {
+        AppSettings::default()
+    } else {
+        std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    };
+
+    let mut modified = false;
+    if settings.cache_dir.is_none() || settings.cache_dir.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false) {
+        settings.cache_dir = Some(default_cache_dir().to_string_lossy().to_string());
+        modified = true;
     }
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    if settings.download_dir.is_none() || settings.download_dir.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false) {
+        settings.download_dir = Some(default_download_dir().to_string_lossy().to_string());
+        modified = true;
+    }
+
+    if modified {
+        let _ = persist_settings(&settings);
+    }
+
+    settings
 }
 
 fn non_empty_opt(s: Option<String>) -> Option<String> {
@@ -213,40 +336,43 @@ fn persist_settings(settings: &AppSettings) -> Result<(), String> {
 }
 
 fn resolve_cache_dir(settings: &AppSettings) -> PathBuf {
-    let mut cache = settings
+    let cache = settings
         .cache_dir
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(dirs::cache_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    if settings.cache_dir.is_none() {
-        cache.push("spotdl-gui");
+        .unwrap_or_else(default_cache_dir);
+    
+    if std::fs::create_dir_all(&cache).is_err() {
+        let fallback = default_cache_dir();
+        let _ = std::fs::create_dir_all(&fallback);
+        fallback
+    } else {
+        cache
     }
-    let _ = std::fs::create_dir_all(&cache);
-    cache
 }
 
 fn resolve_download_dir(settings: &AppSettings) -> PathBuf {
-    let mut dl = settings
+    let dl = settings
         .download_dir
         .as_ref()
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
-        .or_else(dirs::audio_dir)
-        .or_else(dirs::download_dir)
-        .unwrap_or_else(|| PathBuf::from("."));
-    if settings.download_dir.is_none() {
-        dl.push("SpotDL");
+        .unwrap_or_else(default_download_dir);
+    
+    if std::fs::create_dir_all(&dl).is_err() {
+        let fallback = default_download_dir();
+        let _ = std::fs::create_dir_all(&fallback);
+        fallback
+    } else {
+        dl
     }
-    let _ = std::fs::create_dir_all(&dl);
-    dl
 }
 
 fn is_audio_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|ext| matches!(ext, "mp3" | "m4a" | "ogg" | "opus" | "flac" | "wav"))
+        .map(|ext| matches!(ext, "mp3" | "m4a" | "ogg" | "opus" | "flac" | "wav" | "webm"))
         .unwrap_or(false)
 }
 
@@ -317,10 +443,28 @@ fn load_download_index(settings: &AppSettings) -> HashMap<String, String> {
     if !path.exists() {
         return HashMap::new();
     }
-    std::fs::read_to_string(&path)
+    let index: HashMap<String, String> = std::fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+
+    let dl_dir = resolve_download_dir(settings);
+    let mut cleaned_index = HashMap::new();
+    let mut modified = false;
+
+    for (key, filename) in index {
+        if dl_dir.join(&filename).is_file() {
+            cleaned_index.insert(key, filename);
+        } else {
+            modified = true;
+        }
+    }
+
+    if modified {
+        let _ = save_download_index(settings, &cleaned_index);
+    }
+
+    cleaned_index
 }
 
 fn save_download_index(settings: &AppSettings, index: &HashMap<String, String>) -> Result<(), String> {
@@ -442,12 +586,14 @@ fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(),
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("embed_metadata") {
         let mut c = Command::new(bin_path);
         c.arg(audio_path).arg(&json_str);
+        configure_command_env(&mut c);
         c
     } else {
         let script = resolve_embed_script()
             .ok_or_else(|| "embed_metadata.py not found in scripts/".to_string())?;
         let mut c = Command::new("python");
         c.arg(&script).arg(audio_path).arg(&json_str);
+        configure_command_env(&mut c);
         c
     };
 
@@ -975,17 +1121,18 @@ async fn stream_song(query: String, state: State<'_, AppState>) -> Result<Stream
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
         let mut c = Command::new(bin_path);
         c.arg(&yt_query);
+        configure_command_env(&mut c);
         c
     } else {
         let mut c = Command::new("python");
         c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        configure_command_env(&mut c);
         c
     };
 
     let output = cmd
-        .arg("-x")
-        .arg("--audio-format")
-        .arg("mp3")
+        .arg("-f")
+        .arg("bestaudio[ext=m4a]/bestaudio")
         .arg("--output")
         .arg(&out_template)
         .output()
@@ -1072,11 +1219,13 @@ async fn save_song_internal(
     std::fs::copy(&src, &dest).map_err(|e| format!("Failed to save: {}", e))?;
 
     if let Some(meta) = metadata {
-        embed_metadata_file(&dest, &meta)?;
+        if let Err(e) = embed_metadata_file(&dest, &meta) {
+            eprintln!("Warning: Failed to embed metadata to {}: {}", dest.display(), e);
+        }
         let key = track_key(&meta.artist, &meta.title);
         let mut index = load_download_index(&settings);
         index.insert(key, filename);
-        save_download_index(&settings, &index)?;
+        let _ = save_download_index(&settings, &index);
     }
 
     Ok(dest.to_string_lossy().to_string())
@@ -1176,7 +1325,10 @@ fn check_system_dependencies() -> DependencyStatus {
 
     // 1. Check Python and version if not bundled
     if !status.python {
-        if let Ok(output) = std::process::Command::new("python").arg("--version").output() {
+        let mut c = std::process::Command::new("python");
+        c.arg("--version");
+        configure_command_env(&mut c);
+        if let Ok(output) = c.output() {
             if output.status.success() {
                 status.python = true;
                 let ver_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1191,23 +1343,20 @@ fn check_system_dependencies() -> DependencyStatus {
 
     // 2. Check yt-dlp module if not bundled
     if !status.yt_dlp {
-        if let Ok(output) = std::process::Command::new("python")
-            .arg("-m")
-            .arg("yt_dlp")
-            .arg("--version")
-            .output()
-        {
+        let mut c = std::process::Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg("--version");
+        configure_command_env(&mut c);
+        if let Ok(output) = c.output() {
             status.yt_dlp = output.status.success();
         }
     }
 
     // 3. Check syncedlyrics module if not bundled
     if !status.syncedlyrics {
-        if let Ok(output) = std::process::Command::new("python")
-            .arg("-c")
-            .arg("import syncedlyrics")
-            .output()
-        {
+        let mut c = std::process::Command::new("python");
+        c.arg("-c").arg("import syncedlyrics");
+        configure_command_env(&mut c);
+        if let Ok(output) = c.output() {
             status.syncedlyrics = output.status.success();
         }
     }
@@ -1217,12 +1366,13 @@ fn check_system_dependencies() -> DependencyStatus {
         let local_spotdl = std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
         if local_spotdl {
             status.spotdl = true;
-        } else if let Ok(output) = std::process::Command::new("python")
-            .arg("-c")
-            .arg("import spotdl")
-            .output()
-        {
-            status.spotdl = output.status.success();
+        } else {
+            let mut c = std::process::Command::new("python");
+            c.arg("-c").arg("import spotdl");
+            configure_command_env(&mut c);
+            if let Ok(output) = c.output() {
+                status.spotdl = output.status.success();
+            }
         }
     }
 
@@ -1285,10 +1435,12 @@ async fn download_song(query: String, state: State<'_, AppState>) -> Result<Song
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
         let mut c = Command::new(bin_path);
         c.arg(&yt_query);
+        configure_command_env(&mut c);
         c
     } else {
         let mut c = Command::new("python");
         c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        configure_command_env(&mut c);
         c
     };
 
@@ -1303,16 +1455,43 @@ async fn download_song(query: String, state: State<'_, AppState>) -> Result<Song
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Download failed: {}", err));
+        if err.contains("ffprobe") || err.contains("ffmpeg") || err.contains("codec") {
+            println!("FFmpeg/FFprobe missing. Falling back to raw bestaudio download.");
+            let mut fallback_cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+                let mut c = Command::new(bin_path);
+                c.arg(&yt_query);
+                configure_command_env(&mut c);
+                c
+            } else {
+                let mut c = Command::new("python");
+                c.arg("-m").arg("yt_dlp").arg(&yt_query);
+                configure_command_env(&mut c);
+                c
+            };
+            let fallback_output = fallback_cmd
+                .arg("-f")
+                .arg("bestaudio[ext=m4a]/bestaudio")
+                .arg("--output")
+                .arg(&out_template)
+                .output()
+                .map_err(|e| format!("Failed to execute fallback yt-dlp: {}", e))?;
+
+            if !fallback_output.status.success() {
+                let fallback_err = String::from_utf8_lossy(&fallback_output.stderr);
+                return Err(format!("Download failed even with fallback:\n{}", fallback_err));
+            }
+        } else {
+            return Err(format!("Download failed: {}", err));
+        }
     }
 
-    let lyrics_output = Command::new("python")
-        .arg("-c")
-        .arg(format!(
-            "import syncedlyrics; print(syncedlyrics.search('{}') or 'No lyrics found.')",
-            query.replace("'", "\\'")
-        ))
-        .output();
+    let mut lyrics_cmd = Command::new("python");
+    lyrics_cmd.arg("-c").arg(format!(
+        "import syncedlyrics; print(syncedlyrics.search('{}') or 'No lyrics found.')",
+        query.replace("'", "\\'")
+    ));
+    configure_command_env(&mut lyrics_cmd);
+    let lyrics_output = lyrics_cmd.output();
 
     let lyrics = match lyrics_output {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
@@ -1347,12 +1526,14 @@ async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<Str
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("spotify_query") {
         let mut c = Command::new(bin_path);
         c.arg(&query);
+        configure_command_env(&mut c);
         c
     } else {
         let script = resolve_spotify_script()
             .ok_or_else(|| "spotify_query.py not found in scripts/".to_string())?;
         let mut c = Command::new("python");
         c.arg(&script).arg(&query);
+        configure_command_env(&mut c);
         c
     };
     for (k, v) in spotify_env_from_settings(&settings) {
@@ -1447,17 +1628,18 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
         let mut c = tokio::process::Command::new(bin_path);
         c.arg(&yt_query);
+        configure_tokio_command_env(&mut c);
         c
     } else {
         let mut c = tokio::process::Command::new("python");
         c.arg("-m").arg("yt_dlp").arg(&yt_query);
+        configure_tokio_command_env(&mut c);
         c
     };
 
     let mut child = cmd
-        .arg("-x")
-        .arg("--audio-format")
-        .arg("mp3")
+        .arg("-f")
+        .arg("bestaudio[ext=m4a]/bestaudio")
         .arg("-o")
         .arg("-")
         .stdout(std::process::Stdio::piped())
@@ -1469,7 +1651,7 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
     let body = Body::from_stream(stream);
 
     axum::response::Response::builder()
-        .header("Content-Type", "audio/mpeg")
+        .header("Content-Type", "audio/mp4")
         .header("Transfer-Encoding", "chunked")
         .body(body)
         .unwrap()
