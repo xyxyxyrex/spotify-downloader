@@ -1,11 +1,11 @@
 {
-  "version": "0.2.5",
-  "notes": "Plugin Store, Developer mode, and Spotify Wrapped custom v0.2.5 local plugin interface.",
-  "pub_date": "2026-05-20T16:00:00+08:00",
+  "version": "0.2.6",
+  "notes": "Plugin Store Overhaul, DevTools Support, and Spotify Playlist Import Fix.",
+  "pub_date": "2026-05-21T00:15:00+08:00",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHNXSWFpZjNBQVc4WHJ3TC9LaC9DbGtyQ0tkWTR2bHppTGFxdDZYTW5Cd3pjbHFuTzV5L1J5VUtabmkwTy82RjZGQ05iTEVXZFI0UGU4MW1uWlRMekE0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5Mjg4NDI3CWZpbGU6U3BvdERMIEdVSV8wLjIuNV94NjQtc2V0dXAuZXhlCjA5dGZyclFKNGlCS3hjOUVDSkdmbG9MY3RPV3NpdFdhU2NCTGk4MVN3anVpMXpCSit2NFRQQjgxVmtyN3JPRzNya1JRVm4yUjhmd0h5OE9tWjlmUENRPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.5/SpotDL.GUI_0.2.5_x64-setup.exe"
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.6/SpotDL.GUI_0.2.6_x64-setup.exe"
     }
   }
 }

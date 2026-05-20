@@ -477,6 +477,15 @@ def main() -> None:
         if q.startswith("user:") or "/user/" in q:
             user_id = q.split("user:")[-1].strip() if "user:" in q else q.split("/user/")[-1].split("?")[0].split("/")[0].strip()
             out = _fetch_user_playlists_direct(user_id)
+        elif ("open.spotify.com" in q or "spotify.link" in q or q.startswith("spotify:")) and "playlist" in q:
+            # Playlist URLs use direct Spotify Web API — no spotDL needed
+            playlist_id = q.split("?")[0].strip()
+            playlist_id = playlist_id.split("playlist/")[-1].split("?")[0].split(":")[-1] if "playlist/" in playlist_id else playlist_id.split(":")[-1]
+            out = _fetch_playlist_direct(playlist_id)
+        elif q.startswith("playlist:"):
+            # playlist:<id> prefix — direct API, no spotDL needed
+            playlist_id = q.split("playlist:")[-1].strip()
+            out = _fetch_playlist_direct(playlist_id)
         else:
             init_spotify()
             out = resolve_query(q)

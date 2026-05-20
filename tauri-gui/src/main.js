@@ -6264,3 +6264,280 @@ if (document.readyState === "loading") {
     initScreensaverEvents();
 }
 
+// ============================================================================
+// --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.6) ---
+// ============================================================================
+window.spotiTauri = {
+    getHistory: async () => {
+        return invoke("get_history").catch(() => ({}));
+    },
+    showStatus: (msg) => {
+        const statusBar = document.getElementById("status-bar");
+        if (statusBar) {
+            statusBar.textContent = msg;
+            setTimeout(() => {
+                if (statusBar.textContent === msg) {
+                    statusBar.textContent = "";
+                }
+            }, 4000);
+        }
+    },
+    switchView: (viewName) => {
+        if (typeof switchView === "function") {
+            switchView(viewName);
+        }
+    },
+    invoke: async (cmd, args = {}) => {
+        return invoke(cmd, args);
+    },
+    pausePlayback: () => {
+        if (isPlaying && audioPlayer) {
+            audioPlayer.pause();
+            const btnPlay = document.getElementById("btn-play");
+            if (btnPlay) btnPlay.textContent = "▶";
+            updateDiscordPresence(currentSong, true);
+            isPlaying = false;
+            updatePlayingIndicators();
+        }
+    },
+    
+    // Core Plugin Dynamic Registration API
+    registerPlugin: (meta) => {
+        if (!meta) {
+            console.error("Plugin registration failed: No metadata object provided.");
+            return;
+        }
+        if (!meta.id || typeof meta.id !== "string" || !/^[a-z0-9-_]+$/i.test(meta.id)) {
+            console.error("Plugin registration failed: ID must be a valid alphanumeric string.");
+            alert("Plugin Registration Error: Invalid/missing 'id' field in plugin metadata.");
+            return;
+        }
+        if (!meta.name || typeof meta.name !== "string") {
+            console.error(`Plugin registration failed for "${meta.id}": Name must be a non-empty string.`);
+            alert(`Plugin Registration Error: Invalid/missing 'name' field for plugin "${meta.id}".`);
+            return;
+        }
+        if (typeof meta.launch !== "function") {
+            console.error(`Plugin registration failed for "${meta.id}": launch must be a callable function.`);
+            alert(`Plugin Registration Error: Plugin "${meta.name}" did not expose a callable launch() method.`);
+            return;
+        }
+
+        const installedGrid = document.getElementById("installed-plugins-grid");
+        if (!installedGrid) {
+            console.error("Installed plugins grid not found in DOM.");
+            return;
+        }
+
+        // Remove marketplace card for the same ID (it was just installed)
+        const marketplaceCard = document.querySelector(`#plugins-grid .plugin-card[data-plugin-id="${meta.id}"]`);
+        if (marketplaceCard) marketplaceCard.remove();
+
+        // Remove existing installed card to prevent duplication
+        const existingInstalled = document.querySelector(`#installed-plugins-grid .plugin-card[data-plugin-id="${meta.id}"]`);
+        if (existingInstalled) existingInstalled.remove();
+
+        const card = document.createElement("div");
+        card.className = "plugin-card";
+        card.setAttribute("data-plugin-id", meta.id);
+        card.style.cssText = `
+            background: rgba(255, 255, 255, 0.03); 
+            border: 1px solid rgba(255, 255, 255, 0.08); 
+            border-radius: 12px; 
+            padding: 20px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 15px; 
+            transition: all 0.3s ease; 
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
+            position: relative; 
+            overflow: hidden;
+        `;
+
+        const icon = meta.icon || "🔌";
+        const description = meta.description || "No description provided.";
+        const lastUpdated = meta.lastUpdated || new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+        const downloads = meta.downloads != null ? meta.downloads : 0;
+        const downloadsStr = downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
+
+        card.innerHTML = `
+            <div style="position: absolute; top: 0; left: 0; width: 100%; height: 4px; background: linear-gradient(90deg, #1db954, #8bc34a);"></div>
+            <div style="display: flex; align-items: center; justify-content: space-between;">
+                <span style="font-size: 1.8rem;">${icon}</span>
+                <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
+                    <span style="background: rgba(29, 185, 84, 0.15); color: #1db954; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
+                        ${downloadsStr} downloads
+                    </span>
+                    <span style="color: var(--fg-muted); font-size: 0.65rem; opacity: 0.8;">
+                        Updated: ${lastUpdated}
+                    </span>
+                </div>
+            </div>
+            <div>
+                <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">${meta.name}</h3>
+                <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">${description}</p>
+            </div>
+            <div style="margin-top: auto; display: flex; gap: 10px;">
+                <button type="button" class="btn-primary btn-launch-plugin" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; cursor: pointer;">
+                    Launch
+                </button>
+                <button type="button" class="btn-uninstall-plugin" style="padding: 10px 14px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; background: rgba(255, 60, 60, 0.1); border: 1px solid rgba(255, 60, 60, 0.25); color: #ff4e50; cursor: pointer; transition: all 0.2s;">
+                    Uninstall
+                </button>
+            </div>
+        `;
+
+        // Launch button
+        card.querySelector(".btn-launch-plugin").addEventListener("click", (evt) => {
+            evt.preventDefault();
+            try {
+                meta.launch();
+            } catch (err) {
+                console.error(`Runtime error in plugin "${meta.name}":`, err);
+                alert(`Runtime Error in ${meta.name}: ${err.message}`);
+            }
+        });
+
+        // Uninstall button
+        card.querySelector(".btn-uninstall-plugin").addEventListener("click", (evt) => {
+            evt.preventDefault();
+            card.style.opacity = "0";
+            card.style.transform = "scale(0.95)";
+            setTimeout(() => {
+                card.remove();
+                window.spotiTauri.showStatus(`Plugin "${meta.name}" uninstalled.`);
+            }, 250);
+        });
+
+        installedGrid.appendChild(card);
+        window.spotiTauri.showStatus(`Plugin "${meta.name}" installed!`);
+    }
+};
+
+function initPluginStoreEvents() {
+    fetchMarketplacePlugins();
+}
+
+async function fetchMarketplacePlugins() {
+    const registryUrl = "https://raw.githubusercontent.com/xyxyxyrex/spoti-tauri-plugin-marketplace/main/registry.json";
+    const pluginsGrid = document.getElementById("plugins-grid");
+    const emptyMsg = document.getElementById("marketplace-empty");
+    if (!pluginsGrid) return;
+    
+    if (emptyMsg) emptyMsg.style.display = "block";
+    
+    try {
+        const response = await fetch(registryUrl);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+        const plugins = await response.json();
+        
+        if (emptyMsg) emptyMsg.style.display = "none";
+        
+        plugins.forEach(pluginMeta => {
+            // Skip if already installed
+            if (document.querySelector(`#installed-plugins-grid .plugin-card[data-plugin-id="${pluginMeta.id}"]`)) return;
+            // Skip duplicates in marketplace grid
+            if (document.querySelector(`#plugins-grid .plugin-card[data-plugin-id="${pluginMeta.id}"]`)) return;
+            
+            const card = document.createElement("div");
+            card.className = "plugin-card";
+            card.setAttribute("data-plugin-id", pluginMeta.id);
+            card.style.cssText = `
+                background: rgba(255, 255, 255, 0.03); 
+                border: 1px solid rgba(255, 255, 255, 0.08); 
+                border-radius: 12px; 
+                padding: 20px; 
+                display: flex; 
+                flex-direction: column; 
+                gap: 15px; 
+                transition: all 0.3s ease; 
+                box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
+                position: relative; 
+                overflow: hidden;
+            `;
+
+            const icon = pluginMeta.icon || "🔌";
+            const description = pluginMeta.description || "No description provided.";
+            const lastUpdated = pluginMeta.lastUpdated || "N/A";
+            const downloads = pluginMeta.downloads != null ? pluginMeta.downloads : 0;
+            const downloadsStr = downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
+
+            card.innerHTML = `
+                <div style="display: flex; align-items: center; justify-content: space-between;">
+                    <span style="font-size: 1.8rem;">${icon}</span>
+                    <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
+                        <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
+                            ${downloadsStr} downloads
+                        </span>
+                        <span style="color: var(--fg-muted); font-size: 0.65rem; opacity: 0.8;">
+                            Updated: ${lastUpdated}
+                        </span>
+                    </div>
+                </div>
+                <div>
+                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">${pluginMeta.name}</h3>
+                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">${description}</p>
+                </div>
+                <div style="margin-top: auto; display: flex; gap: 10px;">
+                    <button type="button" class="btn-secondary" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; width: 100%; cursor: pointer;">
+                        Install
+                    </button>
+                </div>
+            `;
+
+            const installBtn = card.querySelector("button");
+            installBtn.addEventListener("click", async (e) => {
+                e.preventDefault();
+                installBtn.textContent = "Installing...";
+                installBtn.disabled = true;
+                
+                try {
+                    const scriptRes = await fetch(pluginMeta.url);
+                    if (!scriptRes.ok) {
+                        throw new Error(`Failed to download: HTTP ${scriptRes.status}`);
+                    }
+                    const code = await scriptRes.text();
+                    
+                    const script = document.createElement("script");
+                    script.type = "module";
+                    const blob = new Blob([code], { type: "application/javascript" });
+                    const url = URL.createObjectURL(blob);
+                    script.src = url;
+                    
+                    script.onload = () => URL.revokeObjectURL(url);
+                    script.onerror = (err) => {
+                        URL.revokeObjectURL(url);
+                        console.error("Plugin loading error:", err);
+                        alert("Evaluation Error: The script contains syntax errors. See devtools.");
+                        installBtn.textContent = "Install";
+                        installBtn.disabled = false;
+                    };
+                    
+                    document.body.appendChild(script);
+                } catch (err) {
+                    console.error("Installation failed:", err);
+                    alert(`Installation failed: ${err.message}`);
+                    installBtn.textContent = "Install";
+                    installBtn.disabled = false;
+                }
+            });
+
+            pluginsGrid.appendChild(card);
+        });
+    } catch (err) {
+        console.error("Failed to load marketplace registry:", err);
+        if (emptyMsg) {
+            emptyMsg.textContent = "Failed to load marketplace. Check your connection.";
+            emptyMsg.style.display = "block";
+        }
+    }
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPluginStoreEvents);
+} else {
+    initPluginStoreEvents();
+}
+
