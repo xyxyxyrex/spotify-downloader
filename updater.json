@@ -1,11 +1,11 @@
 {
-  "version": "0.2.1",
-  "notes": "Initial release with auto-updater support.",
-  "pub_date": "2026-05-20T00:00:00Z",
+  "version": "0.2.3",
+  "notes": "Spoti-tauri branding, titlebar versioning and auto-updater relaunch fixes.",
+  "pub_date": "2026-05-20T15:00:00+08:00",
   "platforms": {
     "windows-x86_64": {
-      "signature": "",
-      "url": ""
+      "signature": "PASTE_THE_CONTENT_OF_THE_ZIP_SIG_FILE_HERE",
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.3/SpotDL-GUI_0.2.3_x64-setup.nsis.zip"
     }
   }
 }
