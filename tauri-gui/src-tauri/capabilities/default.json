@@ -8,6 +8,6 @@
     "opener:default",
     "core:window:allow-start-dragging",
     "updater:default",
-    "core:process:allow-relaunch"
+    "process:allow-restart"
   ]
 }
