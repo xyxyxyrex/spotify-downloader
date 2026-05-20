@@ -5,13 +5,17 @@
         <link rel="stylesheet" href="styles.css" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>SpotDL GUI</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
         <script type="module" src="/main.js" defer></script>
+        <script type="module" src="/plugins/spotify-wrapped.js" defer></script>
     </head>
     <body>
         <header id="custom-titlebar">
             <div class="titlebar-left" data-tauri-drag-region>
                 <span class="titlebar-brand">spoti-tauri</span>
-                <span class="titlebar-title">SpotDL GUI v0.2.4</span>
+                <span class="titlebar-title">SpotDL GUI v0.2.5</span>
             </div>
             <div class="titlebar-actions" data-tauri-drag-region="false">
                 <button
@@ -58,6 +62,7 @@
                 <nav>
                     <a href="#" id="nav-home" class="active">Home</a>
                     <a href="#" id="nav-search">Search</a>
+                    <a href="#" id="nav-plugins">Plugin Store</a>
                 </nav>
                 <div class="playlists-section">
                     <h3>Playlists</h3>
@@ -569,6 +574,110 @@
                         </div>
                     </div>
 
+                    <!-- View: Plugins (Plugin Store) -->
+                    <div id="view-plugins" class="view hidden" style="padding: 24px 30px;">
+                        <div class="plugins-header" style="margin-bottom: 2rem;">
+                            <h2 style="font-size: 2rem; font-weight: 800; background: linear-gradient(135deg, #1db954, #8bc34a); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin-bottom: 0.5rem;">&gt; Plugin Store</h2>
+                            <p style="color: var(--fg-muted); font-size: 0.95rem; margin-top: 0;">Supercharge your music library with community integrations and visual addons.</p>
+                            
+                            <div style="display: flex; gap: 15px; margin-top: 1.5rem; flex-wrap: wrap;">
+                                <input type="text" id="plugins-search" placeholder="Search available plugins..." style="max-width: 400px; flex: 1; padding: 12px 18px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-hover); color: var(--fg); font-size: 0.95rem; outline: none; transition: border-color 0.2s;" />
+                                <button type="button" id="btn-load-local-plugin" class="btn-primary" style="padding: 12px 20px; font-weight: 600; cursor: pointer; border-radius: 8px; display: flex; align-items: center; gap: 8px;">
+                                    <span>⚙</span> Load Local Plugin
+                                </button>
+                                <input type="file" id="plugin-file-input" accept=".js" style="display: none;" />
+                            </div>
+                        </div>
+
+                        <!-- Available Plugins Grid -->
+                        <div class="plugins-grid" id="plugins-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px;">
+                            <!-- Spotify Wrapped Plugin Card -->
+                            <div class="plugin-card" data-plugin-id="spotify-wrapped" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 15px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); position: relative; overflow: hidden;">
+                                <div style="position: absolute; top: 0; left: 0; width: 100%; height: 4px; background: linear-gradient(90deg, #1db954, #8bc34a);"></div>
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span style="font-size: 1.8rem;">🎁</span>
+                                    <span style="background: rgba(29, 185, 84, 0.15); color: #1db954; font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">Installed</span>
+                                </div>
+                                <div>
+                                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">Spotify Wrapped v0.2.5</h3>
+                                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">Relive your top tracks, listening habits, and stats with a sleek, interactive 10-slide 9:16 mobile show.</p>
+                                </div>
+                                <div style="margin-top: auto; display: flex; gap: 10px;">
+                                    <button type="button" id="btn-launch-wrapped" class="btn-primary" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; text-align: center; justify-content: center; width: 100%;">
+                                        Launch Wrapped
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- Mock Plugin 2: Receiptify -->
+                            <div class="plugin-card" data-plugin-id="receiptify" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 15px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); opacity: 0.85;">
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span style="font-size: 1.8rem;">🧾</span>
+                                    <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">Store Item</span>
+                                </div>
+                                <div>
+                                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">Receiptify</h3>
+                                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">Transform your playing history into an elegant, high-fidelity grocery receipt to show off on social media.</p>
+                                </div>
+                                <div style="margin-top: auto; display: flex; gap: 10px;">
+                                    <button type="button" class="btn-secondary btn-install-mock" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; width: 100%;">
+                                        Install Plugin
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Mock Plugin 3: Visualizer Pro -->
+                            <div class="plugin-card" data-plugin-id="visualizer-pro" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 15px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); opacity: 0.85;">
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span style="font-size: 1.8rem;">📊</span>
+                                    <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">Store Item</span>
+                                </div>
+                                <div>
+                                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">Visualizer Pro</h3>
+                                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">Beautiful hardware-accelerated 3D audio visualizers synced with your local and stream audio tracks.</p>
+                                </div>
+                                <div style="margin-top: auto; display: flex; gap: 10px;">
+                                    <button type="button" class="btn-secondary btn-install-mock" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; width: 100%;">
+                                        Install Plugin
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- Mock Plugin 4: Last.fm Scrobbler -->
+                            <div class="plugin-card" data-plugin-id="lastfm-scrobbler" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 15px; transition: all 0.3s ease; box-shadow: 0 4px 20px rgba(0,0,0,0.2); position: relative; overflow: hidden;">
+                                <div style="position: absolute; top: 0; left: 0; width: 100%; height: 4px; background: linear-gradient(90deg, #d51007, #ff4e50);"></div>
+                                <div style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span style="font-size: 1.8rem;">🎧</span>
+                                    <span style="background: rgba(213, 16, 7, 0.15); color: #ff4e50; font-size: 0.75rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; text-transform: uppercase;">Active</span>
+                                </div>
+                                <div>
+                                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">Last.fm Scrobbler</h3>
+                                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">Synchronize your plays in real-time, fetch artist descriptions, similar songs, and regional chart updates.</p>
+                                </div>
+                                <div style="margin-top: auto; display: flex; gap: 10px;">
+                                    <button type="button" class="btn-secondary" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; cursor: not-allowed; width: 100%;" disabled="">
+                                        Configured
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Local Plugin Upload / Paste Area (for testing and extensibility) -->
+                        <div id="local-plugin-zone" style="margin-top: 3rem; background: rgba(255, 255, 255, 0.02); border: 1px dashed rgba(255, 255, 255, 0.15); border-radius: 12px; padding: 25px; text-align: center; transition: all 0.2s;">
+                            <span style="font-size: 2.2rem; display: block; margin-bottom: 10px;">🔌</span>
+                            <h3 style="font-size: 1.2rem; font-weight: 700; margin: 0 0 8px 0; color: #fff;">Developer Mode: Load Local Plugin</h3>
+                            <p style="color: var(--fg-muted); font-size: 0.9rem; max-width: 500px; margin: 0 auto 20px auto; line-height: 1.45;">Upload a single Javascript (.js) plugin file to register custom callbacks and execute custom dashboard modules.</p>
+                            <div style="display: flex; justify-content: center; gap: 15px; flex-wrap: wrap;">
+                                <button type="button" id="btn-select-js-file" class="btn-secondary" style="padding: 10px 18px; border-radius: 6px; font-weight: 600;">
+                                    Select JS File
+                                </button>
+                                <button type="button" id="btn-paste-js-code" class="btn-secondary" style="padding: 10px 18px; border-radius: 6px; font-weight: 600;">
+                                    Paste Code
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <div id="view-downloads" class="view hidden">
                         <h2>> Downloads</h2>
                         <div class="downloads-panel">
@@ -1068,6 +1177,58 @@
             </div>
             
             <div class="screensaver-close-hint">Press ESC or click anywhere to exit</div>
+        </div>
+
+        <!-- Spotify Wrapped Immersive 9:16 Overlay (GSAP-powered v2) -->
+        <div id="wrapped-overlay" class="wrapped-overlay hidden">
+            <div class="wrapped-card">
+                <!-- Particle canvas for ambient floating particles -->
+                <canvas id="wrapped-particles" class="wrapped-particles"></canvas>
+                
+                <!-- Animated mesh gradient background -->
+                <div id="wrapped-mesh-bg" class="wrapped-mesh-bg"></div>
+                
+                <!-- Story progress indicators -->
+                <div id="wrapped-story-indicators" class="wrapped-story-indicators"></div>
+                
+                <!-- Close button -->
+                <button type="button" id="wrapped-close-btn" class="wrapped-close-btn" title="Close Wrapped">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 1l12 12M13 1L1 13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                </button>
+                
+                <!-- Slide Container -->
+                <div id="wrapped-slides" class="wrapped-slides"></div>
+
+                <!-- Navigation tap zones -->
+                <div id="wrapped-prev-tap" class="wrapped-tap-zone wrapped-tap-prev"></div>
+                <div id="wrapped-next-tap" class="wrapped-tap-zone wrapped-tap-next"></div>
+
+                <!-- Navigation buttons -->
+                <button type="button" id="wrapped-btn-prev" class="wrapped-nav-btn wrapped-nav-prev" title="Previous Slide">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <button type="button" id="wrapped-btn-next" class="wrapped-nav-btn wrapped-nav-next" title="Next Slide">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+                
+                <!-- Bottom Bar -->
+                <div class="wrapped-bottom-bar">
+                    <div class="wrapped-brand">
+                        <span class="wrapped-brand-dot"></span>
+                        <span>SPOTI-TAURI WRAPPED</span>
+                    </div>
+                    <div style="display: flex; gap: 8px; z-index: 25;">
+                        <button type="button" id="wrapped-btn-export" class="wrapped-export-btn" title="Export all slides as ZIP">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            Export ZIP
+                        </button>
+                        <button type="button" id="wrapped-btn-share" class="wrapped-share-btn">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 002 2h12a2 2 0 002-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+                            Share
+                        </button>
+                    </div>
+                </div>
+            </div>
         </div>
     </body>
 </html>

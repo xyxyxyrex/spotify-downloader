@@ -24,7 +24,30 @@ import {
     toggleLikedSong,
     getBestImage,
 } from "./playlists.js";
+import {
+    songKey,
+    hashColor,
+    generateThumbnail,
+    generateArtistAvatar,
+    isValidImage,
+    extractImageFromLastFmTrack,
+    extractImageFromLastFmAlbum,
+    normalizeDurationSecs,
+    formatDuration,
+    parseImagesFromLastFm,
+    mergeImages,
+    pickBestImageUrl,
+    pickAnyValidFromRaw,
+    IMAGE_SIZE_ORDER,
+    PALETTE
+} from "./utils/media.js";
+import {
+    loadUserProfile,
+    setupProfilePage,
+    renderProfilePage
+} from "./components/profile.js";
 
+import { loadSettingsUI, setupSettings } from './components/settings.js';
 const { invoke } = window.__TAURI__.core;
 
 // Memory Cache
@@ -48,7 +71,6 @@ async function cachedInvoke(command, args = {}) {
 }
 
 const LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
-const IMAGE_SIZE_ORDER = ["mega", "extralarge", "large", "medium", "small"];
 
 const audioPlayer = new Audio();
 // Allow Web Audio API processing for visualizer
@@ -108,6 +130,7 @@ const views = {
     artist: document.getElementById("view-artist"),
     album: document.getElementById("view-album"),
     profile: document.getElementById("view-profile"),
+    plugins: document.getElementById("view-plugins"),
 };
 
 const navs = {
@@ -116,6 +139,7 @@ const navs = {
     settings: document.getElementById("nav-settings"),
     downloads: document.getElementById("nav-downloads"),
     profile: document.getElementById("nav-profile-btn"),
+    plugins: document.getElementById("nav-plugins"),
 };
 
 const searchInput = document.getElementById("search-input");
@@ -147,15 +171,9 @@ const detailLyricsEl = document.getElementById("detail-lyrics");
 const detailLikeBtn = document.getElementById("detail-like-btn");
 let detailSidebarSong = null;
 
-const cacheDirInput = document.getElementById("cache-dir-input");
-const downloadDirInput = document.getElementById("download-dir-input");
-const spotifyIdInput = document.getElementById("spotify-id-input");
-const spotifySecretInput = document.getElementById("spotify-secret-input");
-const lastfmApiKeyInput = document.getElementById("lastfm-api-key-input");
 const apiStatusHint = document.getElementById("api-status-hint");
-const settingsStatus = document.getElementById("settings-status");
 
-let apiStatus = { spotify_configured: false, lastfm_configured: false };
+export let apiStatus = { spotify_configured: false, lastfm_configured: false };
 const playlistListEl = document.getElementById("playlist-list");
 const viewModeGridBtn = document.getElementById("view-mode-grid");
 const viewModeListBtn = document.getElementById("view-mode-list");
@@ -188,23 +206,6 @@ let collectionViewMode =
 /** Where to return when leaving artist/album pages. */
 let browseContext = { view: "home", homeCollection: null };
 
-const PALETTE = [
-    "#e74c3c",
-    "#e67e22",
-    "#f1c40f",
-    "#2ecc71",
-    "#1abc9c",
-    "#3498db",
-    "#9b59b6",
-    "#e91e63",
-    "#00bcd4",
-    "#ff5722",
-    "#795548",
-    "#607d8b",
-    "#8bc34a",
-    "#673ab7",
-    "#ff9800",
-];
 
 function buildHomeCollections(geoCountry) {
     const country =
@@ -450,166 +451,17 @@ function buildHomeCollections(geoCountry) {
 /** Filled after geo lookup (see DOMContentLoaded). */
 let homeCollections = buildHomeCollections("United States");
 
-function songKey(song) {
-    return `${song.artist}::${song.title}`;
-}
 
-function hashColor(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-        hash = str.charCodeAt(i) + ((hash << 5) - hash);
-    }
-    return PALETTE[Math.abs(hash) % PALETTE.length];
-}
 
-function generateThumbnail(title, artist, size) {
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    const color1 = hashColor(title + artist);
-    const color2 = hashColor(artist + title);
-    const grad = ctx.createLinearGradient(0, 0, size, size);
-    grad.addColorStop(0, color1);
-    grad.addColorStop(1, color2);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, size, size);
 
-    ctx.fillStyle = "rgba(255,255,255,0.25)";
-    ctx.font = `bold ${size * 0.3}px serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText("♫", size / 2, size * 0.35);
-    ctx.fillStyle = "#fff";
-    ctx.font = `bold ${Math.max(10, size * 0.09)}px Consolas, monospace`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const maxWidth = size * 0.85;
-    const words = title.split(" ");
-    const lines = [];
-    let currentLine = "";
-    for (const word of words) {
-        const test = currentLine ? `${currentLine} ${word}` : word;
-        if (ctx.measureText(test).width > maxWidth && currentLine) {
-            lines.push(currentLine);
-            currentLine = word;
-        } else {
-            currentLine = test;
-        }
-        if (lines.length >= 2) break;
-    }
-    if (currentLine && lines.length < 3) lines.push(currentLine);
-    const lineHeight = size * 0.12;
-    const startY = size * 0.58;
-    lines.forEach((line, i) => {
-        ctx.fillText(line, size / 2, startY + i * lineHeight);
-    });
-    ctx.fillStyle = "rgba(255,255,255,0.6)";
-    ctx.font = `${Math.max(8, size * 0.07)}px Consolas, monospace`;
-    const artistY = startY + lines.length * lineHeight + size * 0.06;
-    const artistText =
-        artist.length > 20 ? `${artist.substring(0, 18)}…` : artist;
-    ctx.fillText(artistText, size / 2, artistY);
-    return canvas;
-}
 
-function generateArtistAvatar(name, size = 150) {
-    const canvas = document.createElement("canvas");
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext("2d");
-    
-    // Hash colors for smooth premium gradient
-    const color1 = hashColor(name);
-    const color2 = hashColor(name.split("").reverse().join(""));
-    
-    const grad = ctx.createLinearGradient(0, 0, size, size);
-    grad.addColorStop(0, color1);
-    grad.addColorStop(1, color2);
-    
-    // Draw circular background
-    ctx.beginPath();
-    ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    
-    // Draw artist initial
-    const initial = (name || "?").charAt(0).toUpperCase();
-    ctx.fillStyle = "#ffffff";
-    ctx.font = `bold ${size * 0.45}px "Outfit", "Inter", sans-serif`;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(initial, size / 2, size / 2);
-    
-    return canvas.toDataURL("image/png");
-}
 
-function isValidImage(url) {
-    return artIsValid(url);
-}
 
-function pickBestImageUrl(images) {
-    if (!images?.length) return null;
-    for (const size of IMAGE_SIZE_ORDER) {
-        const found = images.find((img) => img.size === size);
-        if (found?.url && isValidImage(found.url)) return found.url;
-    }
-    return images.find((img) => isValidImage(img.url))?.url ?? null;
-}
 
-function parseImagesFromLastFm(imageArray) {
-    if (!Array.isArray(imageArray)) return [];
-    return imageArray
-        .map((img) => ({
-            size: img.size || "unknown",
-            url: img["#text"] || "",
-        }))
-        .filter((img) => isValidImage(img.url));
-}
 
-function mergeImages(...lists) {
-    const seen = new Set();
-    const out = [];
-    for (const list of lists) {
-        for (const img of list) {
-            if (!seen.has(img.url)) {
-                seen.add(img.url);
-                out.push(img);
-            }
-        }
-    }
-    return out;
-}
 
-function pickAnyValidFromRaw(imageArray) {
-    if (!Array.isArray(imageArray)) return null;
-    for (let i = imageArray.length - 1; i >= 0; i--) {
-        const url = imageArray[i]["#text"];
-        if (isValidImage(url)) return url;
-    }
-    return null;
-}
 
-function extractImageFromLastFmTrack(track) {
-    const images = mergeImages(
-        parseImagesFromLastFm(track.image),
-        track.album?.image ? parseImagesFromLastFm(track.album.image) : [],
-    );
-    return pickBestImageUrl(images) || pickAnyValidFromRaw(track.image);
-}
 
-function extractImageFromLastFmAlbum(album) {
-    const images = parseImagesFromLastFm(album.image);
-    return pickBestImageUrl(images) || pickAnyValidFromRaw(album.image);
-}
-
-function normalizeDurationSecs(raw) {
-    if (raw == null || raw === "") return null;
-    let n = Number(raw);
-    if (Number.isNaN(n)) return null;
-    if (n > 7200) n = Math.floor(n / 1000);
-    return n;
-}
 
 // --- Queue Logic ---
 function renderQueueUI() {
@@ -1586,6 +1438,7 @@ function setupNowPlayingContext() {
     nowPlayingEl.addEventListener("contextmenu", (e) => {
         if (!currentSong) return;
         e.preventDefault();
+        e.stopPropagation();
         selectedSong = currentSong;
         refreshContextMenuForSong(selectedSong);
         showContextMenuAt(e.clientX, e.clientY);
@@ -1623,13 +1476,6 @@ function setupLikeButton() {
     });
 }
 
-function formatDuration(seconds) {
-    const n = normalizeDurationSecs(seconds);
-    if (!n) return null;
-    const m = Math.floor(n / 60);
-    const s = Math.floor(n % 60);
-    return `${m}:${s.toString().padStart(2, "0")}`;
-}
 
 function escapeHtml(text) {
     const div = document.createElement("div");
@@ -2259,7 +2105,7 @@ function setSongDownloadActivity(song, stage) {
     renderDownloadsActivity();
 }
 
-function clearSongDownloadActivity(song) {
+export function clearSongDownloadActivity(song) {
     if (!song?.title || !song?.artist) return;
     const key = `${song.artist.trim().toLowerCase()}|${song.title.trim().toLowerCase()}`;
     downloadActivity.delete(key);
@@ -2587,18 +2433,35 @@ function setupPlayer() {
     });
 
     btnPlay.addEventListener("click", () => {
-        if (!audioPlayer.src) return;
+        if (!audioPlayer.src) {
+            if (appQueue.length > 0) {
+                const idx = (queueIndex >= 0 && queueIndex < appQueue.length) ? queueIndex : 0;
+                playSong(appQueue[idx]).catch(err => {
+                    console.error("Playback failed:", err);
+                    statusBar.textContent = `Playback failed: ${err}`;
+                });
+            } else {
+                statusBar.textContent = "Queue is empty. Select or search a song to play!";
+            }
+            return;
+        }
         if (isPlaying) {
             audioPlayer.pause();
             btnPlay.textContent = "▶";
             updateDiscordPresence(currentSong, true);
+            isPlaying = false;
+            updatePlayingIndicators();
         } else {
-            audioPlayer.play();
-            btnPlay.textContent = "❚❚";
-            updateDiscordPresence(currentSong, false);
+            audioPlayer.play().then(() => {
+                btnPlay.textContent = "❚❚";
+                updateDiscordPresence(currentSong, false);
+                isPlaying = true;
+                updatePlayingIndicators();
+            }).catch(err => {
+                console.error("Audio play failed:", err);
+                statusBar.textContent = `Playback error: ${err}`;
+            });
         }
-        isPlaying = !isPlaying;
-        updatePlayingIndicators();
     });
 
     btnPrev?.addEventListener("click", () => playPreviousTrack());
@@ -2683,11 +2546,16 @@ function setupNavigation() {
     });
     navs.settings?.addEventListener("click", async () => {
         switchView("settings");
+        await loadSettingsUI();
         await refreshApiStatus();
     });
     navs.downloads?.addEventListener("click", () => {
         switchView("downloads");
         initDownloadsView();
+    });
+    navs.plugins?.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchView("plugins");
     });
     document.getElementById("nav-profile-btn")?.addEventListener("click", () => {
         switchView("profile");
@@ -3460,7 +3328,7 @@ function updateHomeLastfmHint() {
         "Home browse groups (Top 100, charts, tag picks) use Last.fm. Add a Last.fm API key in Settings. Spotify Client ID and Secret are for playlists and Spotify URLs only — they do not load these groups.";
 }
 
-async function refreshApiStatus() {
+export async function refreshApiStatus() {
     try {
         apiStatus = await invoke("get_api_status");
         if (apiStatusHint) {
@@ -3484,53 +3352,6 @@ async function refreshApiStatus() {
     }
 }
 
-async function loadSettingsUI() {
-    try {
-        // Refresh API status first to check if embedded keys or set keys are active
-        await refreshApiStatus();
-
-        const [settings, cachePath, downloadPath] = await Promise.all([
-            invoke("get_settings"),
-            invoke("get_cache_path"),
-            invoke("get_download_path"),
-        ]);
-        const cdir = settings.cacheDir ?? settings.cache_dir;
-        const ddir = settings.downloadDir ?? settings.download_dir;
-        const sid = settings.spotifyClientId ?? settings.spotify_client_id;
-        const ssec =
-            settings.spotifyClientSecret ?? settings.spotify_client_secret;
-        const lfm = settings.lastfmApiKey ?? settings.lastfm_api_key;
-
-        cacheDirInput.value = cdir || "";
-        downloadDirInput.value = ddir || "";
-        spotifyIdInput.value = sid || "";
-        spotifySecretInput.value = ssec || "";
-        if (lastfmApiKeyInput) {
-            lastfmApiKeyInput.value = lfm || "";
-        }
-        cacheDirInput.placeholder = cachePath;
-        downloadDirInput.placeholder = downloadPath;
-
-        // Set elegant placeholders indicating compile-time embedded credentials
-        if (apiStatus?.spotify_configured) {
-            spotifyIdInput.placeholder = "Embedded default key active (Optional)";
-            spotifySecretInput.placeholder = "Embedded default secret active (Optional)";
-        } else {
-            spotifyIdInput.placeholder = "From Spotify Developer Dashboard";
-            spotifySecretInput.placeholder = "Keep secret — stored locally";
-        }
-
-        if (lastfmApiKeyInput) {
-            if (apiStatus?.lastfm_configured) {
-                lastfmApiKeyInput.placeholder = "Embedded default API key active (Optional)";
-            } else {
-                lastfmApiKeyInput.placeholder = "Or LASTFM_API_KEY in .env";
-            }
-        }
-    } catch (err) {
-        console.error("Failed to load settings:", err);
-    }
-}
 
 async function checkDependencies() {
     const pythonText = document.getElementById("dep-status-python-text");
@@ -3629,7 +3450,7 @@ async function checkDependencies() {
 
 document.getElementById("btn-recheck-dependencies")?.addEventListener("click", checkDependencies);
 
-function applyTheme(themeName, customCssCode) {
+export function applyTheme(themeName, customCssCode) {
     let style = document.getElementById("custom-theme-style");
     if (!style) {
         style = document.createElement("style");
@@ -3695,7 +3516,7 @@ function applyTheme(themeName, customCssCode) {
     style.innerHTML = generatedCss;
 }
 
-function refreshThemeOptions() {
+export function refreshThemeOptions() {
     const themeSelect = document.getElementById("theme-select");
     if (!themeSelect) return;
     
@@ -3728,514 +3549,7 @@ function refreshThemeOptions() {
 // Initial theme load
 applyTheme(localStorage.getItem("app-theme") || "default", localStorage.getItem("app-custom-css") || "");
 
-function setupSettings() {
-    // Theme logic
-    const themeSelect = document.getElementById("theme-select");
-    const customCssInput = document.getElementById("custom-css-input");
-    const btnImportCss = document.getElementById("btn-import-css");
-    const cssFileInput = document.getElementById("css-file-input");
 
-    refreshThemeOptions();
-
-    if (themeSelect) themeSelect.value = localStorage.getItem("app-theme") || "default";
-    if (customCssInput) customCssInput.value = localStorage.getItem("app-custom-css") || "";
-
-    themeSelect?.addEventListener("change", () => {
-        applyTheme(themeSelect.value, customCssInput.value);
-    });
-
-    customCssInput?.addEventListener("input", () => {
-        applyTheme(themeSelect.value, customCssInput.value);
-    });
-
-    btnImportCss?.addEventListener("click", () => cssFileInput?.click());
-
-    cssFileInput?.addEventListener("change", (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-            if (customCssInput) {
-                customCssInput.value = ev.target.result;
-                applyTheme(themeSelect.value, customCssInput.value);
-            }
-        };
-        reader.readAsText(file);
-    });
-
-    const btnCreateTheme = document.getElementById("btn-create-theme");
-    btnCreateTheme?.addEventListener("click", () => {
-        const computed = getComputedStyle(document.documentElement);
-        
-        const getVal = (varName, fallback) => {
-            let val = computed.getPropertyValue(varName).trim();
-            if (!val) return fallback;
-            // Ensure 6-digit hex format for input[type=color] compatibility
-            if (val.startsWith("#") && val.length === 4) {
-                val = "#" + val[1] + val[1] + val[2] + val[2] + val[3] + val[3];
-            }
-            return val;
-        };
-
-        const currentBg = getVal("--bg", "#121212");
-        const currentAccent = getVal("--accent", "#1db954");
-        const currentPanel = getVal("--bg-panel", "#181818");
-        const currentCard = getVal("--bg-card", "#1e1e1e");
-        const currentHover = getVal("--bg-hover", "#282828");
-        const currentBorder = getVal("--border", "#333333");
-        const currentFg = getVal("--fg", "#e0e0e0");
-        const currentFgMuted = getVal("--fg-muted", "#a0a0a0");
-
-        const originalCustomCss = customCssInput ? customCssInput.value : "";
-        const originalTheme = themeSelect ? themeSelect.value : "default";
-
-        const bodyHtml = `
-            <div class="theme-creator-modal" style="display: grid; grid-template-columns: 1fr 1fr; gap: 14px 20px; margin-bottom: 20px;">
-                <div style="grid-column: span 2; display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Theme Name</label>
-                    <input type="text" id="tc-name" placeholder="E.g. Neon Cyber, Forest Mist..." autocomplete="off" style="width: 100%; padding: 10px 14px; background: var(--bg-hover); border: 1px solid var(--border); color: var(--fg); border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; font-family: monospace;" />
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Background Color</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-bg" value="${currentBg}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-bg-txt" style="font-size: 0.85rem; font-family: monospace;">${currentBg}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Accent Color</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-accent" value="${currentAccent}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-accent-txt" style="font-size: 0.85rem; font-family: monospace;">${currentAccent}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Panel Background</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-panel" value="${currentPanel}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-panel-txt" style="font-size: 0.85rem; font-family: monospace;">${currentPanel}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Card Background</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-card" value="${currentCard}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-card-txt" style="font-size: 0.85rem; font-family: monospace;">${currentCard}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Hover Background</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-hover" value="${currentHover}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-hover-txt" style="font-size: 0.85rem; font-family: monospace;">${currentHover}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Border Color</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-border" value="${currentBorder}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-border-txt" style="font-size: 0.85rem; font-family: monospace;">${currentBorder}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Text (Primary)</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-fg" value="${currentFg}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-fg-txt" style="font-size: 0.85rem; font-family: monospace;">${currentFg}</span>
-                    </div>
-                </div>
-                <div style="display: flex; flex-direction: column; gap: 4px;">
-                    <label style="font-size: 0.85rem; color: var(--fg-muted);">Text (Secondary)</label>
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <input type="color" id="tc-fg-muted" value="${currentFgMuted}" style="width: 32px; height: 32px; border: 1px solid var(--border); padding: 0; background: none; cursor: pointer; border-radius: 6px;" />
-                        <span id="tc-fg-muted-txt" style="font-size: 0.85rem; font-family: monospace;">${currentFgMuted}</span>
-                    </div>
-                </div>
-            </div>
-            <div style="font-size: 0.8rem; color: var(--fg-muted); border-top: 1px solid var(--border); padding-top: 12px; line-height: 1.4; margin-top: 10px;">
-                * Color modifications will be applied live so you can preview them instantly!
-            </div>
-        `;
-
-        showModal(
-            "Custom Theme Creator",
-            bodyHtml,
-            () => {
-                const nameInput = document.getElementById("tc-name");
-                const name = nameInput ? nameInput.value.trim() : "";
-                if (!name) {
-                    if (nameInput) {
-                        nameInput.style.borderColor = "#ff4444";
-                        nameInput.placeholder = "Please enter a theme name!";
-                        nameInput.animate([
-                            { transform: 'translateX(0px)' },
-                            { transform: 'translateX(-4px)' },
-                            { transform: 'translateX(4px)' },
-                            { transform: 'translateX(-4px)' },
-                            { transform: 'translateX(4px)' },
-                            { transform: 'translateX(0px)' }
-                        ], { duration: 200 });
-                    }
-                    return false;
-                }
-
-                const bg = document.getElementById("tc-bg").value;
-                const accent = document.getElementById("tc-accent").value;
-                const panel = document.getElementById("tc-panel").value;
-                const card = document.getElementById("tc-card").value;
-                const hover = document.getElementById("tc-hover").value;
-                const border = document.getElementById("tc-border").value;
-                const fg = document.getElementById("tc-fg").value;
-                const fgMuted = document.getElementById("tc-fg-muted").value;
-
-                const customThemeCss = `:root {
-    --bg: ${bg};
-    --accent: ${accent};
-    --bg-panel: ${panel};
-    --bg-card: ${card};
-    --bg-hover: ${hover};
-    --border: ${border};
-    --fg: ${fg};
-    --fg-muted: ${fgMuted};
-}`;
-                // Clear inline style overrides from preview targets!
-                const app = document.getElementById("app");
-                const titlebar = document.getElementById("custom-titlebar");
-                const targets = [app, titlebar].filter(Boolean);
-                const ids = ["--bg", "--accent", "--bg-panel", "--bg-card", "--bg-hover", "--border", "--fg", "--fg-muted"];
-                
-                targets.forEach(el => {
-                    ids.forEach(varName => el.style.removeProperty(varName));
-                });
-
-                // Generate a safe unique ID for this theme
-                const themeId = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "theme-" + Date.now();
-
-                // Retrieve existing custom themes
-                let customThemes = [];
-                try {
-                    customThemes = JSON.parse(localStorage.getItem("app-custom-themes") || "[]");
-                } catch (e) {}
-
-                // Remove theme if it already exists with the same ID, or append it
-                customThemes = customThemes.filter(t => t.id !== themeId);
-                customThemes.push({
-                    id: themeId,
-                    name: name,
-                    css: customThemeCss
-                });
-
-                // Save custom themes list
-                localStorage.setItem("app-custom-themes", JSON.stringify(customThemes));
-
-                // Update theme select preference
-                localStorage.setItem("app-theme", `custom-${themeId}`);
-
-                // Refresh options dropdown and set to new theme
-                refreshThemeOptions();
-                if (themeSelect) {
-                    themeSelect.value = `custom-${themeId}`;
-                }
-
-                // Apply the theme immediately
-                applyTheme(`custom-${themeId}`, customCssInput ? customCssInput.value : "");
-
-                statusBar.textContent = `Custom theme "${name}" created and applied!`;
-            },
-            "Save Theme",
-            true,
-            () => {
-                // Revert live preview changes if cancelled
-                applyTheme(originalTheme, originalCustomCss);
-
-                // Clear inline style overrides from preview targets!
-                const app = document.getElementById("app");
-                const titlebar = document.getElementById("custom-titlebar");
-                const targets = [app, titlebar].filter(Boolean);
-                const ids = ["--bg", "--accent", "--bg-panel", "--bg-card", "--bg-hover", "--border", "--fg", "--fg-muted"];
-                
-                targets.forEach(el => {
-                    ids.forEach(varName => el.style.removeProperty(varName));
-                });
-            }
-        );
-
-        // Live preview dynamic engine!
-        const liveUpdate = () => {
-            const bg = document.getElementById("tc-bg").value;
-            const accent = document.getElementById("tc-accent").value;
-            const panel = document.getElementById("tc-panel").value;
-            const card = document.getElementById("tc-card").value;
-            const hover = document.getElementById("tc-hover").value;
-            const border = document.getElementById("tc-border").value;
-            const fg = document.getElementById("tc-fg").value;
-            const fgMuted = document.getElementById("tc-fg-muted").value;
-
-            document.getElementById("tc-bg-txt").textContent = bg.toUpperCase();
-            document.getElementById("tc-accent-txt").textContent = accent.toUpperCase();
-            document.getElementById("tc-panel-txt").textContent = panel.toUpperCase();
-            document.getElementById("tc-card-txt").textContent = card.toUpperCase();
-            document.getElementById("tc-hover-txt").textContent = hover.toUpperCase();
-            document.getElementById("tc-border-txt").textContent = border.toUpperCase();
-            document.getElementById("tc-fg-txt").textContent = fg.toUpperCase();
-            document.getElementById("tc-fg-muted-txt").textContent = fgMuted.toUpperCase();
-
-            // Set custom properties only on main app containers so the modal keeps its theme
-            const app = document.getElementById("app");
-            const titlebar = document.getElementById("custom-titlebar");
-            const targets = [app, titlebar].filter(Boolean);
-
-            targets.forEach(el => {
-                el.style.setProperty("--bg", bg);
-                el.style.setProperty("--accent", accent);
-                el.style.setProperty("--bg-panel", panel);
-                el.style.setProperty("--bg-card", card);
-                el.style.setProperty("--bg-hover", hover);
-                el.style.setProperty("--border", border);
-                el.style.setProperty("--fg", fg);
-                el.style.setProperty("--fg-muted", fgMuted);
-            });
-        };
-
-        const ids = ["tc-bg", "tc-accent", "tc-panel", "tc-card", "tc-hover", "tc-border", "tc-fg", "tc-fg-muted"];
-        ids.forEach(id => {
-            const input = document.getElementById(id);
-            input?.addEventListener("input", liveUpdate);
-        });
-    });
-
-    document.querySelectorAll(".btn-browse").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-            const targetId = btn.dataset.target;
-            const title = btn.dataset.title || "Select folder";
-            const input = document.getElementById(targetId);
-            try {
-                const picked = await invoke("pick_folder", { title });
-                if (picked) input.value = picked;
-            } catch (err) {
-                setSettingsStatus(`Browse failed: ${err}`, "err");
-            }
-        });
-    });
-
-    document
-        .getElementById("btn-save-settings")
-        .addEventListener("click", async () => {
-            try {
-                // Save theme preferences
-                if (themeSelect) localStorage.setItem("app-theme", themeSelect.value);
-                if (customCssInput) localStorage.setItem("app-custom-css", customCssInput.value);
-
-                await invoke("set_settings", {
-                    input: {
-                        cacheDir: cacheDirInput.value.trim() || null,
-                        downloadDir: downloadDirInput.value.trim() || null,
-                        spotifyClientId: spotifyIdInput.value.trim() || null,
-                        spotifyClientSecret:
-                            spotifySecretInput.value.trim() || null,
-                        lastfmApiKey: lastfmApiKeyInput?.value.trim() || null,
-                    },
-                });
-                await loadSettingsUI();
-                await refreshApiStatus();
-                setSettingsStatus("Settings saved.", "ok");
-            } catch (err) {
-                setSettingsStatus(`Save failed: ${err}`, "err");
-            }
-        });
-
-    document
-        .getElementById("btn-reset-settings")
-        .addEventListener("click", async () => {
-            try {
-                await invoke("set_settings", {
-                    input: {
-                        cacheDir: "",
-                        downloadDir: "",
-                        spotifyClientId: "",
-                        spotifyClientSecret: "",
-                        lastfmApiKey: "",
-                    },
-                });
-                cacheDirInput.value = "";
-                downloadDirInput.value = "";
-                spotifyIdInput.value = "";
-                spotifySecretInput.value = "";
-                if (lastfmApiKeyInput) lastfmApiKeyInput.value = "";
-                await loadSettingsUI();
-                await refreshApiStatus();
-                setSettingsStatus("Reset to default locations.", "ok");
-            } catch (err) {
-                setSettingsStatus(`Reset failed: ${err}`, "err");
-            }
-        });
-
-    document.getElementById("btn-export-settings").addEventListener("click", async () => {
-        try {
-            const settings = await invoke("get_settings");
-            const playlistsData = getPlaylists();
-            const history = await invoke("get_history").catch(() => ({}));
-            
-            // Collect all localStorage data (listening data and configurations)
-            const customThemes = localStorage.getItem("app-custom-themes");
-            const appTheme = localStorage.getItem("app-theme");
-            const appCustomCss = localStorage.getItem("app-custom-css");
-            const recentlyPlayed = localStorage.getItem("spotdl_gui_recently_played");
-            const userProfileName = localStorage.getItem("user_profile_name");
-            const collectionViewMode = localStorage.getItem("collectionViewMode");
-            const detailSidebarCollapsed = localStorage.getItem("detailSidebarCollapsed");
-            
-            const exportData = {
-                settings,
-                playlists: playlistsData,
-                history,
-                localStorage: {
-                    "app-custom-themes": customThemes ? JSON.parse(customThemes) : null,
-                    "app-theme": appTheme,
-                    "app-custom-css": appCustomCss,
-                    "spotdl_gui_recently_played": recentlyPlayed ? JSON.parse(recentlyPlayed) : null,
-                    "user_profile_name": userProfileName,
-                    "collectionViewMode": collectionViewMode,
-                    "detailSidebarCollapsed": detailSidebarCollapsed
-                }
-            };
-            
-            const filename = `spot-dl-config-${new Date().toISOString().slice(0,10)}.json`;
-            await invoke("save_file_dialog", { 
-                filename, 
-                content: JSON.stringify(exportData, null, 2) 
-            });
-            
-            setSettingsStatus("Configs and user data exported successfully.", "ok");
-        } catch (err) {
-            setSettingsStatus(`Export failed: ${err}`, "err");
-        }
-    });
-
-    document.getElementById("btn-import-settings").addEventListener("click", async () => {
-        try {
-            const content = await invoke("pick_json_file");
-            if (!content) return; // user cancelled
-
-            const data = JSON.parse(content);
-            if (data.settings) {
-                await invoke("set_settings", {
-                    input: {
-                        cacheDir: data.settings.cacheDir ?? data.settings.cache_dir ?? null,
-                        downloadDir: data.settings.downloadDir ?? data.settings.download_dir ?? null,
-                        spotifyClientId: data.settings.spotifyClientId ?? data.settings.spotify_client_id ?? null,
-                        spotifyClientSecret: data.settings.spotifyClientSecret ?? data.settings.spotify_client_secret ?? null,
-                        lastfmApiKey: data.settings.lastfmApiKey ?? data.settings.lastfm_api_key ?? null,
-                    }
-                });
-            }
-            
-            if (data.playlists && Array.isArray(data.playlists)) {
-                // 1. Load current playlists
-                const current = await invoke("load_playlists") || [];
-                
-                // Track matching helper
-                const getTrackKey = (t) => `${String(t.artist || "").trim().toLowerCase()}|${String(t.title || "").trim().toLowerCase()}`;
-                const generateUniqueId = (prefix) => `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-                
-                // Helper to deep copy and assign new IDs to imported tracks
-                const cloneTracks = (tracks, startOrder) => {
-                    return tracks.map((t, idx) => ({
-                        ...t,
-                        id: generateUniqueId("tr"),
-                        order: startOrder + idx
-                    }));
-                };
-                
-                for (const importedPl of data.playlists) {
-                    if (!importedPl.name || !Array.isArray(importedPl.tracks)) continue;
-                    
-                    // Find if the playlist already exists by ID or name
-                    let existingPl = current.find(p => p.id === importedPl.id || p.name.trim().toLowerCase() === importedPl.name.trim().toLowerCase());
-                    
-                    if (existingPl) {
-                        // Merge tracks
-                        const existingKeys = new Set(existingPl.tracks.map(getTrackKey));
-                        const newTracksToAppend = importedPl.tracks.filter(t => !existingKeys.has(getTrackKey(t)));
-                        
-                        if (newTracksToAppend.length > 0) {
-                            const startOrder = existingPl.tracks.length;
-                            const clonedNew = cloneTracks(newTracksToAppend, startOrder);
-                            existingPl.tracks = [...existingPl.tracks, ...clonedNew];
-                        }
-                    } else {
-                        // Add a brand new playlist (with cloned/unique IDs to prevent any index clashes)
-                        const newPl = {
-                            id: importedPl.id === "pl_liked_songs" ? "pl_liked_songs" : generateUniqueId("pl"),
-                            name: importedPl.name.trim(),
-                            tracks: cloneTracks(importedPl.tracks, 0)
-                        };
-                        current.push(newPl);
-                    }
-                }
-                
-                await invoke("save_playlists", { playlists: current });
-                await loadPlaylistsFromDisk();
-                renderPlaylistSidebar();
-            }
-            
-            if (data.history && typeof data.history === 'object' && !Array.isArray(data.history)) {
-                await invoke("import_history", { history: data.history }).catch(err => console.error("History import err:", err));
-            }
-
-            // Restore localStorage data if present in import file
-            if (data.localStorage) {
-                const ls = data.localStorage;
-                if (ls["app-custom-themes"]) {
-                    localStorage.setItem("app-custom-themes", JSON.stringify(ls["app-custom-themes"]));
-                }
-                if (ls["app-theme"]) {
-                    localStorage.setItem("app-theme", ls["app-theme"]);
-                }
-                if (ls["app-custom-css"]) {
-                    localStorage.setItem("app-custom-css", ls["app-custom-css"]);
-                }
-                if (ls["spotdl_gui_recently_played"]) {
-                    localStorage.setItem("spotdl_gui_recently_played", JSON.stringify(ls["spotdl_gui_recently_played"]));
-                }
-                if (ls["user_profile_name"]) {
-                    localStorage.setItem("user_profile_name", ls["user_profile_name"]);
-                }
-                if (ls["collectionViewMode"]) {
-                    localStorage.setItem("collectionViewMode", ls["collectionViewMode"]);
-                }
-                if (ls["detailSidebarCollapsed"]) {
-                    localStorage.setItem("detailSidebarCollapsed", ls["detailSidebarCollapsed"]);
-                }
-
-                // Apply restored theme
-                if (typeof applyTheme === "function") {
-                    const restoredTheme = ls["app-theme"] || "default";
-                    const restoredCss = ls["app-custom-css"] || "";
-                    applyTheme(restoredTheme, restoredCss);
-                }
-                if (typeof updateThemeSelectOptions === "function") {
-                    updateThemeSelectOptions();
-                }
-                if (typeof renderProfilePage === "function") {
-                    renderProfilePage();
-                }
-            }
-            
-            await loadSettingsUI();
-            await refreshApiStatus();
-            setSettingsStatus("Configs and user data imported successfully.", "ok");
-        } catch (err) {
-            setSettingsStatus(`Import failed: ${err}`, "err");
-        }
-    });
-}
-
-function setSettingsStatus(msg, kind) {
-    settingsStatus.textContent = msg;
-    settingsStatus.className = "settings-status";
-    if (kind) settingsStatus.classList.add(kind);
-}
 
 function setupDetailSidebar() {
     const storedWidth = localStorage.getItem("detailSidebarWidth");
@@ -4845,6 +4159,7 @@ async function renderAlbumGrid(albums, container) {
 
         tile.addEventListener("contextmenu", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             selectedGroup = {
                 type: "album",
                 name: album.title,
@@ -5804,7 +5119,7 @@ function setupPlaylists() {
         });
 }
 
-function renderPlaylistSidebar() {
+export function renderPlaylistSidebar() {
     playlistListEl.innerHTML = "";
     const sorted = [...getPlaylists()].sort((a, b) => {
         if (isLikedPlaylist(a.id)) return -1;
@@ -5825,6 +5140,7 @@ function renderPlaylistSidebar() {
         li.addEventListener("click", () => openPlaylistView(pl.id));
         li.addEventListener("contextmenu", (e) => {
             e.preventDefault();
+            e.stopPropagation();
             selectedGroup = {
                 type: "playlist",
                 name: pl.name,
@@ -6116,7 +5432,7 @@ async function openPlaylistView(playlistId) {
 
 // Modal helper system
 // Modal helper system
-function showModal(title, contentHtml, onConfirm, confirmText = "Confirm", showCancel = true, onCancel = null) {
+export function showModal(title, contentHtml, onConfirm, confirmText = "Confirm", showCancel = true, onCancel = null) {
     const overlay = document.getElementById("modal-overlay");
     const contentContainer = overlay.querySelector(".modal-content");
     const titleEl = document.getElementById("modal-title");
@@ -6281,17 +5597,6 @@ async function updateDownloadsUsage() {
     }
 }
 
-async function updateCacheUsage() {
-    try {
-        const sizeBytes = await invoke("get_cache_size");
-        const sizeMb = (sizeBytes / (1024 * 1024)).toFixed(2);
-        document.getElementById("cache-usage-text").textContent =
-            `Current Cache Size: ${sizeMb} MB`;
-    } catch (err) {
-        document.getElementById("cache-usage-text").textContent =
-            `Cache Size: Error (${err})`;
-    }
-}
 
 document
     .getElementById("btn-open-downloads-dir")
@@ -6688,410 +5993,13 @@ setTimeout(() => {
     });
 }, 500);
 
-function loadUserProfile() {
-    const name = localStorage.getItem("user_profile_name") || "Explorer";
-    
-    // Set UI elements
-    const btnName = document.getElementById("profile-btn-name");
-    const btnAvatar = document.getElementById("profile-btn-avatar");
-    const inputName = document.getElementById("profile-name-input");
-    const largeAvatar = document.getElementById("profile-avatar-large");
-    
-    if (btnName) btnName.textContent = name;
-    if (btnAvatar) btnAvatar.textContent = name.charAt(0).toUpperCase();
-    if (inputName) inputName.value = name;
-    if (largeAvatar) largeAvatar.textContent = name.charAt(0).toUpperCase();
-}
 
-function saveUserProfileName(newName) {
-    const trimmed = newName.trim();
-    if (!trimmed) return;
-    localStorage.setItem("user_profile_name", trimmed);
-    loadUserProfile();
-}
 
-function setupProfilePage() {
-    loadUserProfile();
-    
-    const inputName = document.getElementById("profile-name-input");
-    const editBtn = document.getElementById("profile-edit-name-btn");
-    
-    if (inputName) {
-        inputName.addEventListener("blur", () => {
-            saveUserProfileName(inputName.value);
-            inputName.style.borderBottomColor = "transparent";
-        });
-        inputName.addEventListener("keydown", (e) => {
-            if (e.key === "Enter") {
-                inputName.blur();
-            }
-        });
-        inputName.addEventListener("focus", () => {
-            inputName.style.borderBottomColor = "var(--accent)";
-        });
-    }
-    
-    if (editBtn && inputName) {
-        editBtn.addEventListener("click", () => {
-            inputName.focus();
-        });
-    }
 
-    // Set up range tab click listeners
-    document.querySelectorAll(".profile-range-tab").forEach(tab => {
-        tab.addEventListener("click", () => {
-            document.querySelectorAll(".profile-range-tab").forEach(t => t.classList.remove("active"));
-            tab.classList.add("active");
-            const range = tab.getAttribute("data-range");
-            renderProfileStats(range);
-        });
-    });
-}
 
-function renderProfilePage() {
-    loadUserProfile();
-    renderProfileStats("all");
-    
-    // Reset active tab to "all"
-    document.querySelectorAll(".profile-range-tab").forEach(tab => {
-        if (tab.getAttribute("data-range") === "all") {
-            tab.classList.add("active");
-        } else {
-            tab.classList.remove("active");
-        }
-    });
-}
 
-async function renderProfileStats(range = "all") {
-    // 1. Fetch play history
-    const historyMap = await invoke("get_history").catch(() => ({}));
-    const historyList = Object.values(historyMap);
-    
-    // 2. Determine time threshold in seconds
-    const now = Math.floor(Date.now() / 1000);
-    let threshold = 0;
-    if (range === "today") {
-        threshold = now - 24 * 3600;
-    } else if (range === "week") {
-        threshold = now - 7 * 24 * 3600;
-    } else if (range === "month") {
-        threshold = now - 30 * 24 * 3600;
-    } else if (range === "year") {
-        threshold = now - 365 * 24 * 3600;
-    }
-    
-    // 3. Count plays per Track, Artist, Album within threshold
-    const trackCounts = [];
-    const artistCounts = {};
-    const albumCounts = {};
-    let totalPlays = 0;
-    
-    historyList.forEach(item => {
-        // Filter play timestamps within threshold
-        const validTimestamps = (item.play_timestamps || []).filter(t => t >= threshold);
-        const playCount = validTimestamps.length;
-        
-        if (playCount > 0) {
-            totalPlays += playCount;
-            // Track play
-            trackCounts.push({
-                title: item.title,
-                artist: item.artist,
-                album: item.album || "Unknown Album",
-                image: item.image,
-                plays: playCount,
-                duration: item.duration_secs
-            });
-            
-            // Artist play count accumulator
-            const artistKey = String(item.artist || "").trim();
-            if (artistKey) {
-                artistCounts[artistKey] = (artistCounts[artistKey] || 0) + playCount;
-            }
-            
-            // Album play count accumulator
-            const albumName = String(item.album || "").trim();
-            if (albumName) {
-                const albumKey = `${albumName}|${artistKey}`;
-                if (!albumCounts[albumKey]) {
-                    albumCounts[albumKey] = {
-                        name: albumName,
-                        artist: artistKey,
-                        image: item.image,
-                        plays: 0
-                    };
-                }
-                albumCounts[albumKey].plays += playCount;
-            }
-        }
-    });
-    
-    // Sort and limit collections
-    const topTracks = trackCounts
-        .sort((a, b) => b.plays - a.plays)
-        .slice(0, 10);
-        
-    const topArtists = Object.entries(artistCounts)
-        .map(([name, plays]) => ({ name, plays }))
-        .sort((a, b) => b.plays - a.plays)
-        .slice(0, 5);
-        
-    const topAlbums = Object.values(albumCounts)
-        .sort((a, b) => b.plays - a.plays)
-        .slice(0, 5);
-        
-    // 4. Update Overview Dashboard Widgets
-    const statPlays = document.getElementById("stat-total-plays");
-    const statArtists = document.getElementById("stat-unique-artists");
-    const statAlbums = document.getElementById("stat-unique-albums");
-    
-    if (statPlays) statPlays.textContent = totalPlays.toLocaleString();
-    if (statArtists) statArtists.textContent = Object.keys(artistCounts).length.toLocaleString();
-    if (statAlbums) statAlbums.textContent = Object.keys(albumCounts).length.toLocaleString();
-    
-    // 5. Render lists or clean empty placeholders
-    renderTopTracksList(topTracks);
-    renderTopArtistsList(topArtists);
-    renderTopAlbumsList(topAlbums);
-}
 
-function renderTopTracksList(tracks) {
-    const listEl = document.getElementById("profile-top-tracks-list");
-    if (!listEl) return;
-    listEl.innerHTML = "";
-    
-    if (tracks.length === 0) {
-        for (let i = 0; i < 5; i++) {
-            const slot = document.createElement("div");
-            slot.className = "profile-empty-slot";
-            slot.textContent = `[ track slot ${i + 1} ]`;
-            listEl.appendChild(slot);
-        }
-        return;
-    }
-    
-    tracks.forEach((t, i) => {
-        const item = document.createElement("div");
-        item.style.display = "flex";
-        item.style.alignItems = "center";
-        item.style.gap = "12px";
-        item.style.padding = "8px 12px";
-        item.style.borderRadius = "6px";
-        item.style.background = "rgba(255,255,255,0.02)";
-        item.style.border = "1px solid var(--border)";
-        item.style.transition = "all 0.2s ease";
-        
-        // Track number badge
-        const badge = document.createElement("div");
-        badge.style.width = "22px";
-        badge.style.textAlign = "center";
-        badge.style.fontSize = "0.85rem";
-        badge.style.fontWeight = "bold";
-        badge.style.fontFamily = "monospace";
-        badge.style.color = i === 0 ? "var(--accent)" : "var(--fg-muted)";
-        badge.textContent = String(i + 1).padStart(2, "0");
-        
-        // Cover Art image
-        const imgWrap = document.createElement("div");
-        imgWrap.style.width = "36px";
-        imgWrap.style.height = "36px";
-        imgWrap.style.borderRadius = "4px";
-        imgWrap.style.overflow = "hidden";
-        imgWrap.style.background = "var(--bg-hover)";
-        imgWrap.style.flexShrink = "0";
-        imgWrap.style.display = "flex";
-        imgWrap.style.alignItems = "center";
-        imgWrap.style.justifyContent = "center";
-        
-        if (t.image) {
-            const img = document.createElement("img");
-            img.src = t.image;
-            img.style.width = "100%";
-            img.style.height = "100%";
-            img.style.objectFit = "cover";
-            imgWrap.appendChild(img);
-        } else {
-            imgWrap.innerHTML = `<span style="font-family: monospace; font-size: 10px; color: var(--fg-muted);">..</span>`;
-        }
-        
-        // Meta info
-        const meta = document.createElement("div");
-        meta.style.flex = "1";
-        meta.style.minWidth = "0";
-        meta.style.display = "flex";
-        meta.style.flexDirection = "column";
-        
-        const titleSpan = document.createElement("span");
-        titleSpan.style.fontWeight = "600";
-        titleSpan.style.color = "var(--fg-main)";
-        titleSpan.style.fontSize = "0.85rem";
-        titleSpan.style.whiteSpace = "nowrap";
-        titleSpan.style.overflow = "hidden";
-        titleSpan.style.textOverflow = "ellipsis";
-        titleSpan.style.fontFamily = "monospace";
-        titleSpan.textContent = t.title;
-        
-        const artistSpan = document.createElement("span");
-        artistSpan.style.fontSize = "0.75rem";
-        artistSpan.style.color = "var(--fg-muted)";
-        artistSpan.style.whiteSpace = "nowrap";
-        artistSpan.style.overflow = "hidden";
-        artistSpan.style.textOverflow = "ellipsis";
-        artistSpan.style.fontFamily = "monospace";
-        artistSpan.textContent = `${t.artist} - ${t.album}`;
-        
-        meta.appendChild(titleSpan);
-        meta.appendChild(artistSpan);
-        
-        // Play Count badge
-        const playsBadge = document.createElement("div");
-        playsBadge.style.fontFamily = "monospace";
-        playsBadge.style.fontSize = "0.75rem";
-        playsBadge.style.color = "var(--accent)";
-        playsBadge.style.background = "rgba(255,255,255,0.03)";
-        playsBadge.style.border = "1px solid var(--border)";
-        playsBadge.style.padding = "3px 8px";
-        playsBadge.style.borderRadius = "4px";
-        playsBadge.style.fontWeight = "bold";
-        playsBadge.textContent = `${t.plays} plays`;
-        
-        item.appendChild(badge);
-        item.appendChild(imgWrap);
-        item.appendChild(meta);
-        item.appendChild(playsBadge);
-        
-        listEl.appendChild(item);
-    });
-}
 
-function renderTopArtistsList(artists) {
-    const listEl = document.getElementById("profile-top-artists-list");
-    if (!listEl) return;
-    listEl.innerHTML = "";
-    
-    if (artists.length === 0) {
-        for (let i = 0; i < 3; i++) {
-            const slot = document.createElement("div");
-            slot.className = "profile-empty-slot";
-            slot.textContent = `[ artist slot ${i + 1} ]`;
-            listEl.appendChild(slot);
-        }
-        return;
-    }
-    
-    artists.forEach((art, i) => {
-        const item = document.createElement("div");
-        item.style.display = "flex";
-        item.style.alignItems = "center";
-        item.style.justifyContent = "space-between";
-        item.style.padding = "6px 8px";
-        item.style.borderBottom = "1px solid var(--border)";
-        
-        const nameSpan = document.createElement("span");
-        nameSpan.style.fontFamily = "monospace";
-        nameSpan.style.fontSize = "0.8rem";
-        nameSpan.style.fontWeight = "bold";
-        nameSpan.style.color = "var(--fg-main)";
-        nameSpan.textContent = `${String(i + 1).padStart(2, "0")}. ${art.name}`;
-        
-        const playsSpan = document.createElement("span");
-        playsSpan.style.fontFamily = "monospace";
-        playsSpan.style.fontSize = "0.75rem";
-        playsSpan.style.color = "var(--fg-muted)";
-        playsSpan.textContent = `${art.plays} plays`;
-        
-        item.appendChild(nameSpan);
-        item.appendChild(playsSpan);
-        listEl.appendChild(item);
-    });
-}
-
-function renderTopAlbumsList(albums) {
-    const listEl = document.getElementById("profile-top-albums-list");
-    if (!listEl) return;
-    listEl.innerHTML = "";
-    
-    if (albums.length === 0) {
-        for (let i = 0; i < 3; i++) {
-            const slot = document.createElement("div");
-            slot.className = "profile-empty-slot";
-            slot.textContent = `[ album slot ${i + 1} ]`;
-            listEl.appendChild(slot);
-        }
-        return;
-    }
-    
-    albums.forEach((alb, i) => {
-        const item = document.createElement("div");
-        item.style.display = "flex";
-        item.style.alignItems = "center";
-        item.style.gap = "10px";
-        item.style.padding = "6px 8px";
-        item.style.borderBottom = "1px solid var(--border)";
-        
-        const imgWrap = document.createElement("div");
-        imgWrap.style.width = "28px";
-        imgWrap.style.height = "28px";
-        imgWrap.style.borderRadius = "3px";
-        imgWrap.style.overflow = "hidden";
-        imgWrap.style.flexShrink = "0";
-        imgWrap.style.background = "var(--bg-hover)";
-        imgWrap.style.display = "flex";
-        imgWrap.style.alignItems = "center";
-        imgWrap.style.justifyContent = "center";
-        
-        if (alb.image) {
-            const img = document.createElement("img");
-            img.src = alb.image;
-            img.style.width = "100%";
-            img.style.height = "100%";
-            img.style.objectFit = "cover";
-            imgWrap.appendChild(img);
-        } else {
-            imgWrap.innerHTML = `<span style="font-family: monospace; font-size: 8px; color: var(--fg-muted);">..</span>`;
-        }
-        
-        const meta = document.createElement("div");
-        meta.style.flex = "1";
-        meta.style.minWidth = "0";
-        meta.style.display = "flex";
-        meta.style.flexDirection = "column";
-        
-        const nameSpan = document.createElement("span");
-        nameSpan.style.fontFamily = "monospace";
-        nameSpan.style.fontSize = "0.8rem";
-        nameSpan.style.fontWeight = "bold";
-        nameSpan.style.color = "var(--fg-main)";
-        nameSpan.style.whiteSpace = "nowrap";
-        nameSpan.style.overflow = "hidden";
-        nameSpan.style.textOverflow = "ellipsis";
-        nameSpan.textContent = `${String(i + 1).padStart(2, "0")}. ${alb.name}`;
-        
-        const artistSpan = document.createElement("span");
-        artistSpan.style.fontSize = "0.7rem";
-        artistSpan.style.color = "var(--fg-muted)";
-        artistSpan.style.whiteSpace = "nowrap";
-        artistSpan.style.overflow = "hidden";
-        artistSpan.style.textOverflow = "ellipsis";
-        artistSpan.style.fontFamily = "monospace";
-        artistSpan.textContent = alb.artist;
-        
-        meta.appendChild(nameSpan);
-        meta.appendChild(artistSpan);
-        
-        const playsSpan = document.createElement("span");
-        playsSpan.style.fontFamily = "monospace";
-        playsSpan.style.fontSize = "0.75rem";
-        playsSpan.style.color = "var(--fg-muted)";
-        playsSpan.style.flexShrink = "0";
-        playsSpan.textContent = `${alb.plays} plays`;
-        
-        item.appendChild(imgWrap);
-        item.appendChild(meta);
-        item.appendChild(playsSpan);
-        listEl.appendChild(item);
-    });
-}
 
 /* Now Playing Immersive Screensaver System */
 let screensaverInterval = null;

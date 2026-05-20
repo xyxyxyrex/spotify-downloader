@@ -583,7 +583,8 @@ fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(),
 
     let json_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
-    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("embed_metadata") {
+    let mut cmd = if std::env::var("CARGO_MANIFEST_DIR").is_err() && get_bundled_bin_path("embed_metadata").is_some() {
+        let bin_path = get_bundled_bin_path("embed_metadata").unwrap();
         let mut c = Command::new(bin_path);
         c.arg(audio_path).arg(&json_str);
         configure_command_env(&mut c);
@@ -917,6 +918,18 @@ fn save_file_dialog(filename: String, content: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn save_zip_file(filename: String, bytes: Vec<u8>) -> Result<(), String> {
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("ZIP Archives", &["zip"])
+        .set_file_name(&filename)
+        .save_file()
+    {
+        std::fs::write(path, bytes).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn pick_json_file() -> Result<Option<String>, String> {
     if let Some(path) = rfd::FileDialog::new()
         .add_filter("JSON Files", &["json"])
@@ -1087,7 +1100,13 @@ async fn fetch_lastfm(
 
 /// Download a song to the cache directory for streaming.
 #[tauri::command]
-async fn stream_song(query: String, state: State<'_, AppState>) -> Result<StreamResult, String> {
+async fn stream_song(
+    query: String,
+    title: Option<String>,
+    artist: Option<String>,
+    duration_secs: Option<u64>,
+    state: State<'_, AppState>,
+) -> Result<StreamResult, String> {
     use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
 
@@ -1115,7 +1134,45 @@ async fn stream_song(query: String, state: State<'_, AppState>) -> Result<Stream
         }
     }
 
-    let yt_query = format!("ytsearch1:{} audio", query);
+    let yt_query = if query.trim().starts_with("http://") || query.trim().starts_with("https://") {
+        query.trim().replace("music.youtube.com", "www.youtube.com")
+    } else {
+        let mut resolved = format!("ytsearch1:{} audio", query);
+
+        // Run the ytmusicapi python search script to find a precise match
+        let script_path = if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+            PathBuf::from(manifest).join("src").join("ytmusic_search.py")
+        } else {
+            if let Some(handle) = APP_HANDLE.get() {
+                handle.path().resolve("src/ytmusic_search.py", tauri::path::BaseDirectory::Resource).unwrap_or_default()
+            } else {
+                PathBuf::new()
+            }
+        };
+
+        if script_path.is_file() {
+            let mut py_cmd = Command::new("python");
+            py_cmd.arg(&script_path)
+                  .arg(&query)
+                  .arg(title.as_deref().unwrap_or(""))
+                  .arg(artist.as_deref().unwrap_or(""));
+            if let Some(dur) = duration_secs {
+                py_cmd.arg(dur.to_string());
+            }
+            configure_command_env(&mut py_cmd);
+            
+            if let Ok(output) = py_cmd.output() {
+                if output.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if stdout_str.len() == 11 && stdout_str.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+                        resolved = format!("https://www.youtube.com/watch?v={}", stdout_str);
+                    }
+                }
+            }
+        }
+        resolved
+    };
+
     let out_template = format!("{}/{}.%(ext)s", cache_dir.to_str().unwrap(), hash_str);
 
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
@@ -1130,9 +1187,18 @@ async fn stream_song(query: String, state: State<'_, AppState>) -> Result<Stream
         c
     };
 
+    if let Some(ffmpeg_path) = get_bundled_bin_path("ffmpeg") {
+        if let Some(parent) = ffmpeg_path.parent() {
+            cmd.arg("--ffmpeg-location").arg(parent);
+        }
+    }
+
     let output = cmd
         .arg("-f")
-        .arg("bestaudio[ext=m4a]/bestaudio")
+        .arg("bestaudio")
+        .arg("-x")
+        .arg("--audio-format")
+        .arg("m4a")
         .arg("--output")
         .arg(&out_template)
         .output()
@@ -1504,7 +1570,11 @@ fn get_download_path(state: State<AppState>) -> String {
 async fn download_song(query: String, state: State<'_, AppState>) -> Result<SongResult, String> {
     let settings = state.settings.lock().unwrap().clone();
     let dl_dir = resolve_download_dir(&settings);
-    let yt_query = format!("ytsearch1:{} audio", query);
+    let yt_query = if query.trim().starts_with("http://") || query.trim().starts_with("https://") {
+        query.trim().replace("music.youtube.com", "www.youtube.com")
+    } else {
+        format!("ytsearch1:{} audio", query)
+    };
     let out_template = format!("{}/%(title)s.%(ext)s", dl_dir.to_str().unwrap());
 
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
@@ -1598,7 +1668,8 @@ async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<Str
             "Spotify is not configured. Add Client ID and Secret in Settings.".to_string(),
         );
     }
-    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("spotify_query") {
+    let mut cmd = if std::env::var("CARGO_MANIFEST_DIR").is_err() && get_bundled_bin_path("spotify_query").is_some() {
+        let bin_path = get_bundled_bin_path("spotify_query").unwrap();
         let mut c = Command::new(bin_path);
         c.arg(&query);
         configure_command_env(&mut c);
@@ -1774,6 +1845,7 @@ fn init_discord_rpc() -> Option<DiscordIpcClient> {
 struct DiscordPresencePayload {
     title: String,
     artist: String,
+    #[allow(dead_code)]
     album: Option<String>,
     image_url: Option<String>,
     #[serde(default)]
@@ -1871,6 +1943,7 @@ pub fn run() {
             set_settings,
             pick_folder,
             save_file_dialog,
+            save_zip_file,
             pick_json_file,
             read_audio_file,
             read_file_bytes,

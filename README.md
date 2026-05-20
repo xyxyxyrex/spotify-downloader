@@ -1,8 +1,8 @@
 # SpotDL GUI
 
-SpotDL GUI is a premium, high-performance desktop music streaming and downloading client. It is built as a native graphical user interface wrapper and fork of the excellent command-line utility spotDL (https://github.com/spotDL/spotify-downloader).
+SpotDL GUI is desktop music streaming and downloading client. It is built as a native graphical user interface wrapper and fork of the command-line utility spotDL (https://github.com/spotDL/spotify-downloader).
 
-This desktop application allows users to search, stream, and download songs locally with high-fidelity album art, metadata tagging, and synchronized lyrics, all packaged into a modern, fluid desktop application.
+This desktop application allows users to search, stream, and download songs locally with  album art, metadata tagging, and s lyrics, all packaged into a modern, fluid desktop application.
 
 ---
 
@@ -20,8 +20,9 @@ This desktop application allows users to search, stream, and download songs loca
 * Gapless Local Caching: Streamed tracks are saved dynamically to a high-speed local cache directory to ensure instant startup on repeat listens.
 * Theme Engine: Preloaded dark and light UI themes including Default Dark, Beige Light, Catppuccin Mocha, and Dracula. Includes a custom CSS editor allowing users to inject CSS rules or upload stylesheet configurations.
 * Spotify Playlist Import: Visual browser to search, load, and selectively import songs from public Spotify playlists. Built-in concurrency locks prevent duplicate track creations and key spams.
-* System Dependency Diagnostics: A built-in health monitor in the Settings dashboard showing the installation status of Python, yt-dlp, spotDL, and syncedlyrics.
-* Standalone Bundled Runtime: Complete zero-configuration setup. All core dependencies (including Python runtime utilities, yt-dlp, and spotDL) are compiled and bundled directly within the installer, removing the need for manual python or command-line dependency setups.
+* System Dependency Diagnostics: A built-in health monitor in the Settings dashboard showing the installation status of Python, yt-dlp, spotDL, and syncedlyrics with diagnostic indicators.
+* Local Disk Management: Single-click tools to purge and reset cached temporary audio tracks and safe double-confirmation purges to clean your download directories.
+* Rate Limit Protection: Ready to use with built-in developer client credentials out-of-the-box. Advanced users can provide custom Spotify Client ID, Client Secret, and Last.fm API Key overrides to bypass rate limits.
 
 ---
 
@@ -32,7 +33,7 @@ Go to the Releases tab of this repository and download the latest compiled Windo
 * MSI Setup (Standard Windows Setup)
 * NSIS Setup (Standalone EXE Setup Wizard)
 
-The application comes pre-packaged with all required runtimes. Simply run the installer and start streaming and downloading music immediately without any additional configuration.
+Verify that Python 3 and the required dependencies are installed on your machine. You can run the live checkup tool inside the Settings panel to confirm health.
 
 ### For Developers (Local Compilation)
 To run the project in development mode:
