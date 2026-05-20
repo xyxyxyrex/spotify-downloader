@@ -154,6 +154,47 @@ select::placeholder {
     color: #fff;
 }
 
+.titlebar-btn-update {
+    width: auto;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--accent);
+    background: rgba(29, 185, 84, 0.08);
+    color: var(--accent);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: bold;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    margin-right: 8px;
+    transition: all 0.2s ease;
+    animation: pulse-update 2.5s infinite;
+    -webkit-app-region: no-drag;
+}
+
+.titlebar-btn-update:hover {
+    background: var(--accent);
+    color: #121212;
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(29, 185, 84, 0.4);
+}
+
+@keyframes pulse-update {
+    0% {
+        box-shadow: 0 0 0 0 rgba(29, 185, 84, 0.35);
+    }
+    70% {
+        box-shadow: 0 0 0 6px rgba(29, 185, 84, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(29, 185, 84, 0);
+    }
+}
+
 #app {
     width: 100%;
     flex: 1;

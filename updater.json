@@ -1,0 +1,11 @@
+{
+  "version": "0.2.1",
+  "notes": "Initial release with auto-updater support.",
+  "pub_date": "2026-05-20T00:00:00Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "",
+      "url": ""
+    }
+  }
+}

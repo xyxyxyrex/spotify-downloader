@@ -2437,6 +2437,75 @@ function setupTitleBar() {
             console.error(err);
         }
     });
+
+    // Check for app updates
+    checkAppUpdates();
+}
+
+async function checkAppUpdates() {
+    try {
+        if (!window.__TAURI__ || !window.__TAURI__.updater) {
+            console.warn("Tauri updater plugin is not available on this platform/build.");
+            return;
+        }
+
+        const { check } = window.__TAURI__.updater;
+        const update = await check();
+        if (update) {
+            console.log(`Update is available! New version: ${update.version}`);
+            const updateBtn = document.getElementById("btn-update-available");
+            if (updateBtn) {
+                updateBtn.style.display = "flex";
+                updateBtn.addEventListener("click", async () => {
+                    updateBtn.disabled = true;
+                    updateBtn.textContent = "Downloading...";
+                    updateBtn.style.animation = "none";
+                    updateBtn.style.background = "#ffa500";
+                    updateBtn.style.color = "#000";
+                    try {
+                        let downloaded = 0;
+                        let contentLength = 0;
+                        await update.downloadAndInstall((event) => {
+                            switch (event.event) {
+                                case 'Started':
+                                    contentLength = event.data.contentLength;
+                                    console.log(`Started downloading ${contentLength} bytes`);
+                                    break;
+                                case 'Progress':
+                                    downloaded += event.data.chunkLength;
+                                    if (contentLength) {
+                                        const percent = Math.round((downloaded / contentLength) * 100);
+                                        updateBtn.textContent = `Downloading (${percent}%)`;
+                                    }
+                                    break;
+                                case 'Finished':
+                                    console.log('Download finished');
+                                    break;
+                            }
+                        });
+                        
+                        updateBtn.textContent = "Relaunching...";
+                        updateBtn.style.background = "#1db954";
+                        updateBtn.style.color = "#fff";
+                        
+                        if (window.__TAURI__.process && window.__TAURI__.process.relaunch) {
+                            await window.__TAURI__.process.relaunch();
+                        } else {
+                            await invoke("tauri", { cmd: "relaunch" });
+                        }
+                    } catch (err) {
+                        console.error("Failed to install update:", err);
+                        updateBtn.disabled = false;
+                        updateBtn.textContent = "Update failed (Retry)";
+                        updateBtn.style.background = "#d32f2f";
+                        updateBtn.style.color = "#fff";
+                    }
+                });
+            }
+        }
+    } catch (err) {
+        console.error("Error during update check:", err);
+    }
 }
 
 function setupPlayer() {
