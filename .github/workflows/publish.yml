@@ -44,11 +44,19 @@ jobs:
         working-directory: tauri-gui
         run: npm ci
 
+      - name: Clean Signing Key
+        shell: bash
+        env:
+          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          CLEAN_KEY=$(echo "$RAW_KEY" | tr -d '\r\n ')
+          echo "TAURI_SIGNING_PRIVATE_KEY=$CLEAN_KEY" >> $GITHUB_ENV
+
       - name: Build and Publish Tauri App
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: v__VERSION__
           releaseName: 'SpotDL GUI v__VERSION__'
