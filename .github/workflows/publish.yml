@@ -72,20 +72,20 @@ jobs:
           echo "Detected App Version: $VERSION"
           
           # Find signature file locally in target bundle folder
-          SIG_FILE=\$(find tauri-gui/src-tauri/target -name "*.exe.sig" | head -n 1)
+          SIG_FILE=$(find tauri-gui/src-tauri/target -name "*.exe.sig" | head -n 1)
           
-          if [ -f "\$SIG_FILE" ]; then
-            SIG_CONTENT=\$(cat "\$SIG_FILE")
-            echo "Found signature: \$SIG_CONTENT"
+          if [ -f "$SIG_FILE" ]; then
+            SIG_CONTENT=$(cat "$SIG_FILE")
+            echo "Found signature: $SIG_CONTENT"
             
             # Update manifest JSON safely
             node -e "
               const fs = require('fs');
               const path = 'updater.json';
               const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
-              manifest.version = '\$VERSION';
-              manifest.platforms['windows-x86_64'].signature = \`\$SIG_CONTENT\`;
-              manifest.platforms['windows-x86_64'].url = \`https://github.com/xyxyxyrex/spotify-downloader/releases/download/v\${VERSION}/SpotDL.GUI_\${VERSION}_x64-setup.exe\`;
+              manifest.version = '$VERSION';
+              manifest.platforms['windows-x86_64'].signature = '$SIG_CONTENT';
+              manifest.platforms['windows-x86_64'].url = 'https://github.com/xyxyxyrex/spotify-downloader/releases/download/v$VERSION/SpotDL.GUI_${VERSION}_x64-setup.exe';
               fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
             "
             
@@ -93,7 +93,7 @@ jobs:
             git config --global user.name "github-actions[bot]"
             git config --global user.email "github-actions[bot]@users.noreply.github.com"
             git add updater.json
-            git commit -m "chore: auto-update updater.json signature to v\$VERSION [skip ci]"
+            git commit -m "chore: auto-update updater.json signature to v$VERSION [skip ci]"
             git push origin HEAD:master
           else
             echo "Warning: No .exe.sig signature file found. Skipping auto-updater manifest update."
