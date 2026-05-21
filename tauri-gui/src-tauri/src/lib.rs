@@ -434,6 +434,56 @@ fn track_key(artist: &str, title: &str) -> String {
     )
 }
 
+fn stream_result_from_path(path: &std::path::Path) -> StreamResult {
+    StreamResult {
+        file_path: path.to_string_lossy().to_string(),
+        file_name: path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string(),
+    }
+}
+
+/// Saved download or stream cache hit — no network fetch.
+fn resolve_existing_playback_file(
+    settings: &AppSettings,
+    query: &str,
+    artist: Option<&str>,
+    title: Option<&str>,
+) -> Option<std::path::PathBuf> {
+    if let (Some(artist), Some(title)) = (artist, title) {
+        if !artist.trim().is_empty() && !title.trim().is_empty() {
+            let key = track_key(artist, title);
+            let index = load_download_index(settings);
+            if let Some(filename) = index.get(&key) {
+                let path = resolve_download_dir(settings).join(filename);
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    let cache_dir = resolve_cache_dir(settings);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    query.hash(&mut hasher);
+    let hash_str = format!("{:x}", hasher.finish());
+
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if is_audio_file(&path)
+                && path.file_stem().and_then(|s| s.to_str()) == Some(&hash_str)
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 fn download_index_path(settings: &AppSettings) -> PathBuf {
     resolve_download_dir(settings).join(".spotdl-gui-library.json")
 }
@@ -1098,6 +1148,160 @@ async fn fetch_lastfm(
     Ok(body)
 }
 
+const YTDLP_AUDIO_FORMAT: &str = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio";
+
+fn ytmusic_script_path() -> PathBuf {
+    if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
+        let p = PathBuf::from(manifest).join("src").join("ytmusic_search.py");
+        if p.is_file() {
+            return p;
+        }
+    }
+    if let Some(handle) = APP_HANDLE.get() {
+        if let Ok(p) = handle.path().resolve(
+            "src/ytmusic_search.py",
+            tauri::path::BaseDirectory::Resource,
+        ) {
+            if p.is_file() {
+                return p;
+            }
+        }
+    }
+    PathBuf::new()
+}
+
+/// Resolve a text query to a YouTube URL or ytsearch string (shared by cache + live stream).
+fn resolve_youtube_query(
+    query: &str,
+    title: Option<&str>,
+    artist: Option<&str>,
+    duration_secs: Option<u64>,
+) -> String {
+    let q = query.trim();
+    if q.starts_with("http://") || q.starts_with("https://") || q.starts_with("spotify:") {
+        return q.replace("music.youtube.com", "www.youtube.com");
+    }
+
+    let mut resolved = format!("ytsearch1:{} audio", q);
+    let script_path = ytmusic_script_path();
+    if !script_path.is_file() {
+        return resolved;
+    }
+
+    let mut py_cmd = Command::new("python");
+    py_cmd
+        .arg(&script_path)
+        .arg(q)
+        .arg(title.unwrap_or(""))
+        .arg(artist.unwrap_or(""));
+    if let Some(dur) = duration_secs {
+        py_cmd.arg(dur.to_string());
+    }
+    configure_command_env(&mut py_cmd);
+
+    if let Ok(output) = py_cmd.output() {
+        if output.status.success() {
+            let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if stdout_str.len() == 11
+                && stdout_str
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+            {
+                resolved = format!("https://www.youtube.com/watch?v={}", stdout_str);
+            }
+        }
+    }
+    resolved
+}
+
+fn ytdlp_needs_transcode(stderr: &str) -> bool {
+    let s = stderr.to_lowercase();
+    s.contains("ffprobe")
+        || s.contains("ffmpeg")
+        || s.contains("codec")
+        || s.contains("postprocess")
+        || s.contains("merging")
+}
+
+fn run_ytdlp_cache_download(yt_query: &str, out_template: &str) -> Result<(), String> {
+    let mut fast_cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+        let mut c = Command::new(bin_path);
+        c.arg(yt_query);
+        configure_command_env(&mut c);
+        c
+    } else {
+        let mut c = Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg(yt_query);
+        configure_command_env(&mut c);
+        c
+    };
+
+    if let Some(ffmpeg_path) = get_bundled_bin_path("ffmpeg") {
+        if let Some(parent) = ffmpeg_path.parent() {
+            fast_cmd.arg("--ffmpeg-location").arg(parent);
+        }
+    }
+
+    let fast_output = fast_cmd
+        .arg("-f")
+        .arg(YTDLP_AUDIO_FORMAT)
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("--output")
+        .arg(out_template)
+        .output()
+        .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
+
+    if fast_output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&fast_output.stderr);
+    if !ytdlp_needs_transcode(&stderr) {
+        let stdout = String::from_utf8_lossy(&fast_output.stdout);
+        return Err(format!("yt-dlp failed:\n{}\n{}", stderr, stdout));
+    }
+
+    let mut transcode_cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
+        let mut c = Command::new(bin_path);
+        c.arg(yt_query);
+        configure_command_env(&mut c);
+        c
+    } else {
+        let mut c = Command::new("python");
+        c.arg("-m").arg("yt_dlp").arg(yt_query);
+        configure_command_env(&mut c);
+        c
+    };
+
+    if let Some(ffmpeg_path) = get_bundled_bin_path("ffmpeg") {
+        if let Some(parent) = ffmpeg_path.parent() {
+            transcode_cmd.arg("--ffmpeg-location").arg(parent);
+        }
+    }
+
+    let transcode_output = transcode_cmd
+        .arg("-f")
+        .arg("bestaudio")
+        .arg("-x")
+        .arg("--audio-format")
+        .arg("m4a")
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("--output")
+        .arg(out_template)
+        .output()
+        .map_err(|e| format!("Failed to execute yt-dlp transcode: {}", e))?;
+
+    if transcode_output.status.success() {
+        return Ok(());
+    }
+
+    let stderr = String::from_utf8_lossy(&transcode_output.stderr);
+    let stdout = String::from_utf8_lossy(&transcode_output.stdout);
+    Err(format!("yt-dlp failed:\n{}\n{}", stderr, stdout))
+}
+
 /// Download a song to the cache directory for streaming.
 #[tauri::command]
 async fn stream_song(
@@ -1105,6 +1309,7 @@ async fn stream_song(
     title: Option<String>,
     artist: Option<String>,
     duration_secs: Option<u64>,
+    fetch_if_missing: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<StreamResult, String> {
     use std::hash::{Hash, Hasher};
@@ -1113,102 +1318,32 @@ async fn stream_song(
     let settings = state.settings.lock().unwrap().clone();
     let cache_dir = resolve_cache_dir(&settings);
 
+    if let Some(path) = resolve_existing_playback_file(
+        &settings,
+        &query,
+        artist.as_deref(),
+        title.as_deref(),
+    ) {
+        return Ok(stream_result_from_path(&path));
+    }
+
+    if fetch_if_missing == Some(false) {
+        return Err("Track not available locally".to_string());
+    }
+
     let mut hasher = DefaultHasher::new();
     query.hash(&mut hasher);
     let hash_str = format!("{:x}", hasher.finish());
 
-    // Check if it's already cached before downloading
-    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
-        let files: Vec<_> = entries
-            .filter_map(|e| e.ok())
-            .filter(|e| is_audio_file(&e.path()) && e.path().file_stem().and_then(|s| s.to_str()) == Some(&hash_str))
-            .collect();
-            
-        if let Some(existing_file) = files.first() {
-            let file_path = existing_file.path();
-            let file_name = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
-            return Ok(StreamResult {
-                file_path: file_path.to_string_lossy().to_string(),
-                file_name,
-            });
-        }
-    }
-
-    let yt_query = if query.trim().starts_with("http://") || query.trim().starts_with("https://") {
-        query.trim().replace("music.youtube.com", "www.youtube.com")
-    } else {
-        let mut resolved = format!("ytsearch1:{} audio", query);
-
-        // Run the ytmusicapi python search script to find a precise match
-        let script_path = if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-            PathBuf::from(manifest).join("src").join("ytmusic_search.py")
-        } else {
-            if let Some(handle) = APP_HANDLE.get() {
-                handle.path().resolve("src/ytmusic_search.py", tauri::path::BaseDirectory::Resource).unwrap_or_default()
-            } else {
-                PathBuf::new()
-            }
-        };
-
-        if script_path.is_file() {
-            let mut py_cmd = Command::new("python");
-            py_cmd.arg(&script_path)
-                  .arg(&query)
-                  .arg(title.as_deref().unwrap_or(""))
-                  .arg(artist.as_deref().unwrap_or(""));
-            if let Some(dur) = duration_secs {
-                py_cmd.arg(dur.to_string());
-            }
-            configure_command_env(&mut py_cmd);
-            
-            if let Ok(output) = py_cmd.output() {
-                if output.status.success() {
-                    let stdout_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                    if stdout_str.len() == 11 && stdout_str.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
-                        resolved = format!("https://www.youtube.com/watch?v={}", stdout_str);
-                    }
-                }
-            }
-        }
-        resolved
-    };
+    let yt_query = resolve_youtube_query(
+        &query,
+        title.as_deref(),
+        artist.as_deref(),
+        duration_secs,
+    );
 
     let out_template = format!("{}/{}.%(ext)s", cache_dir.to_str().unwrap(), hash_str);
-
-    let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
-        let mut c = Command::new(bin_path);
-        c.arg(&yt_query);
-        configure_command_env(&mut c);
-        c
-    } else {
-        let mut c = Command::new("python");
-        c.arg("-m").arg("yt_dlp").arg(&yt_query);
-        configure_command_env(&mut c);
-        c
-    };
-
-    if let Some(ffmpeg_path) = get_bundled_bin_path("ffmpeg") {
-        if let Some(parent) = ffmpeg_path.parent() {
-            cmd.arg("--ffmpeg-location").arg(parent);
-        }
-    }
-
-    let output = cmd
-        .arg("-f")
-        .arg("bestaudio")
-        .arg("-x")
-        .arg("--audio-format")
-        .arg("m4a")
-        .arg("--output")
-        .arg(&out_template)
-        .output()
-        .map_err(|e| format!("Failed to execute yt-dlp: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!("yt-dlp failed:\n{}\n{}", stderr, stdout));
-    }
+    run_ytdlp_cache_download(&yt_query, &out_template)?;
 
     let files: Vec<_> = std::fs::read_dir(&cache_dir)
         .map_err(|e| format!("Cannot read cache dir: {}", e))?
@@ -1764,13 +1899,19 @@ use axum::body::Body;
 #[derive(serde::Deserialize)]
 struct StreamQuery {
     q: String,
+    title: Option<String>,
+    artist: Option<String>,
+    duration: Option<u64>,
 }
 
 async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse {
-    let query = params.q;
-    let yt_query = format!("ytsearch1:{} audio", query);
-    
-    // Spawn yt-dlp piping out directly
+    let yt_query = resolve_youtube_query(
+        &params.q,
+        params.title.as_deref(),
+        params.artist.as_deref(),
+        params.duration,
+    );
+
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
         let mut c = tokio::process::Command::new(bin_path);
         c.arg(&yt_query);
@@ -1785,7 +1926,9 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
 
     let mut child = cmd
         .arg("-f")
-        .arg("bestaudio[ext=m4a]/bestaudio")
+        .arg(YTDLP_AUDIO_FORMAT)
+        .arg("--no-playlist")
+        .arg("--no-warnings")
         .arg("-o")
         .arg("-")
         .stdout(std::process::Stdio::piped())

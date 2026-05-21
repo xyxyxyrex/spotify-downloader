@@ -4,18 +4,40 @@ import {
     updateShuffleButton,
     updateLoopButton,
     playPreviousTrack,
-    playNextTrack
+    playNextTrack,
 } from "../main.js";
 
-import {
-    isValidImage,
-    generateThumbnail
-} from "../utils/media.js";
+import { isValidImage, generateThumbnail } from "../utils/media.js";
 
 import { resolveArtUrl } from "../art.js";
 
 let screensaverInterval = null;
 let screensaverCursorTimeout = null;
+const SCREENSAVER_TIME_FORMAT_KEY = "spotdl_screensaver_time_format";
+
+function getScreensaverTimeFormat() {
+    try {
+        const saved = localStorage.getItem(SCREENSAVER_TIME_FORMAT_KEY);
+        return saved === "12h" ? "12h" : "24h";
+    } catch {
+        return "24h";
+    }
+}
+
+function setScreensaverTimeFormat(format) {
+    try {
+        localStorage.setItem(SCREENSAVER_TIME_FORMAT_KEY, format);
+    } catch {
+        /* ignore */
+    }
+}
+
+function toggleScreensaverTimeFormat(event) {
+    if (event) event.stopPropagation();
+    const nextFormat = getScreensaverTimeFormat() === "24h" ? "12h" : "24h";
+    setScreensaverTimeFormat(nextFormat);
+    updateScreensaverClock();
+}
 
 export function resetScreensaverCursorTimer() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
@@ -41,16 +63,26 @@ export function updateScreensaverClock() {
     const dateEl = document.getElementById("screensaver-date");
     if (!clockEl) return;
     const now = new Date();
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    const s = String(now.getSeconds()).padStart(2, '0');
-    clockEl.textContent = `${h}:${m}:${s}`;
-    
+    const timeFormat = getScreensaverTimeFormat();
+    const hours24 = now.getHours();
+    const hours12 = hours24 % 12 || 12;
+    const hourText =
+        timeFormat === "12h"
+            ? String(hours12)
+            : String(hours24).padStart(2, "0");
+    const m = String(now.getMinutes()).padStart(2, "0");
+    const s = String(now.getSeconds()).padStart(2, "0");
+    const suffix =
+        timeFormat === "12h" ? ` ${hours24 >= 12 ? "PM" : "AM"}` : "";
+    clockEl.textContent = `${hourText}:${m}:${s}${suffix}`;
+    clockEl.title = `Click to switch to ${timeFormat === "24h" ? "AM/PM" : "24H"}`;
+
     if (dateEl) {
-        const mm = String(now.getMonth() + 1).padStart(2, '0');
-        const dd = String(now.getDate()).padStart(2, '0');
-        const yy = String(now.getFullYear()).slice(-2);
-        dateEl.textContent = `${mm}/${dd}/${yy}`;
+        dateEl.textContent = new Intl.DateTimeFormat(undefined, {
+            month: "long",
+            day: "numeric",
+            year: "numeric",
+        }).format(now);
     }
 }
 
@@ -64,18 +96,18 @@ export function stopScreensaverClock() {
 export async function updateScreensaverUI() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay || ssOverlay.classList.contains("hidden")) return;
-    
+
     const titleEl = document.getElementById("screensaver-title");
     const artistEl = document.getElementById("screensaver-artist");
     const artImg = document.getElementById("screensaver-art");
     const bgEl = document.getElementById("screensaver-bg");
     const wrap = document.getElementById("screensaver-art-wrap");
-    
+
     // Clean old fallback canvases
     if (wrap) {
-        wrap.querySelectorAll("canvas").forEach(c => c.remove());
+        wrap.querySelectorAll("canvas").forEach((c) => c.remove());
     }
-    
+
     const currentSong = getCurrentSong();
     if (!currentSong) {
         titleEl.textContent = "No Track Playing";
@@ -84,7 +116,7 @@ export async function updateScreensaverUI() {
         bgEl.style.backgroundImage = "none";
         return;
     }
-    
+
     // Sync volume bar state on update
     const ssVolBar = document.getElementById("ss-volume-bar");
     const volumeBar = document.getElementById("volume-bar");
@@ -96,11 +128,14 @@ export async function updateScreensaverUI() {
 
     titleEl.textContent = currentSong.title;
     artistEl.textContent = currentSong.artist;
-    
+
     // Auto dynamic font scaling for extremely long titles
     const maxTitleLen = 18;
     if (currentSong.title.length > maxTitleLen) {
-        const dynamicTitleSize = Math.max(1.8, 3.2 - (currentSong.title.length - maxTitleLen) * 0.045);
+        const dynamicTitleSize = Math.max(
+            1.8,
+            3.2 - (currentSong.title.length - maxTitleLen) * 0.045,
+        );
         titleEl.style.fontSize = `${dynamicTitleSize}rem`;
     } else {
         titleEl.style.fontSize = "3.2rem";
@@ -109,12 +144,15 @@ export async function updateScreensaverUI() {
     // Auto dynamic font scaling for extremely long artist names
     const maxArtistLen = 22;
     if (currentSong.artist.length > maxArtistLen) {
-        const dynamicArtistSize = Math.max(1.2, 1.8 - (currentSong.artist.length - maxArtistLen) * 0.025);
+        const dynamicArtistSize = Math.max(
+            1.2,
+            1.8 - (currentSong.artist.length - maxArtistLen) * 0.025,
+        );
         artistEl.style.fontSize = `${dynamicArtistSize}rem`;
     } else {
         artistEl.style.fontSize = "1.8rem";
     }
-    
+
     let artUrl = "";
     if (isValidImage(currentSong.image)) {
         const cached = await resolveArtUrl(currentSong.image);
@@ -122,13 +160,17 @@ export async function updateScreensaverUI() {
             artUrl = cached;
         }
     }
-    
+
     if (artUrl) {
         artImg.src = artUrl;
         artImg.style.opacity = "1";
         bgEl.style.backgroundImage = `url('${artUrl}')`;
     } else {
-        const fallback = generateThumbnail(currentSong.title, currentSong.artist, 420);
+        const fallback = generateThumbnail(
+            currentSong.title,
+            currentSong.artist,
+            420,
+        );
         artImg.src = "";
         artImg.style.opacity = "0";
         bgEl.style.backgroundImage = "none";
@@ -141,15 +183,15 @@ export async function updateScreensaverUI() {
 export function toggleFullscreenScreensaver() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay) return;
-    
+
     if (ssOverlay.classList.contains("hidden")) {
         ssOverlay.classList.remove("hidden");
         startScreensaverClock();
         updateScreensaverUI();
         resetScreensaverCursorTimer();
-        
+
         if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch(e => {
+            document.documentElement.requestFullscreen().catch((e) => {
                 console.warn("Fullscreen request rejected:", e);
             });
         }
@@ -161,19 +203,19 @@ export function toggleFullscreenScreensaver() {
 export function closeFullscreenScreensaver() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay) return;
-    
+
     ssOverlay.classList.add("hidden");
     stopScreensaverClock();
     clearTimeout(screensaverCursorTimeout);
     ssOverlay.classList.remove("cursor-hidden");
-    
+
     const wrap = document.getElementById("screensaver-art-wrap");
     if (wrap) {
-        wrap.querySelectorAll("canvas").forEach(c => c.remove());
+        wrap.querySelectorAll("canvas").forEach((c) => c.remove());
     }
-    
+
     if (document.fullscreenElement) {
-        document.exitFullscreen().catch(e => {
+        document.exitFullscreen().catch((e) => {
             console.warn("Exit fullscreen rejected:", e);
         });
     }
@@ -184,20 +226,26 @@ export function initScreensaverEvents() {
     if (btnSS) {
         btnSS.addEventListener("click", toggleFullscreenScreensaver);
     }
-    
+
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (ssOverlay) {
         ssOverlay.addEventListener("click", closeFullscreenScreensaver);
         ssOverlay.addEventListener("mousemove", resetScreensaverCursorTimer);
     }
-    
+
+    const ssClock = document.getElementById("screensaver-clock");
+    if (ssClock) {
+        ssClock.addEventListener("click", toggleScreensaverTimeFormat);
+        ssClock.addEventListener("mousemove", (e) => e.stopPropagation());
+    }
+
     const ssControls = document.querySelector(".screensaver-controls");
     if (ssControls) {
         ssControls.addEventListener("click", (e) => {
             e.stopPropagation(); // Stops overlay dismissal when clicking control deck
         });
     }
-    
+
     const ssShuffle = document.getElementById("ss-btn-shuffle");
     if (ssShuffle) {
         ssShuffle.addEventListener("click", (e) => {
@@ -214,7 +262,7 @@ export function initScreensaverEvents() {
             playPreviousTrack();
         });
     }
-    
+
     const ssBtnPlay = document.getElementById("ss-btn-play");
     if (ssBtnPlay) {
         ssBtnPlay.addEventListener("click", (e) => {
@@ -223,7 +271,7 @@ export function initScreensaverEvents() {
             if (btnPlay) btnPlay.click();
         });
     }
-    
+
     const ssBtnNext = document.getElementById("ss-btn-next");
     if (ssBtnNext) {
         ssBtnNext.addEventListener("click", (e) => {
@@ -253,7 +301,7 @@ export function initScreensaverEvents() {
             e.stopPropagation(); // Avoid exit click trigger
         });
     }
-    
+
     document.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
             const ss = document.getElementById("fullscreen-screensaver");
@@ -262,7 +310,7 @@ export function initScreensaverEvents() {
             }
         }
     });
-    
+
     document.addEventListener("fullscreenchange", () => {
         if (!document.fullscreenElement) {
             const ss = document.getElementById("fullscreen-screensaver");
