@@ -1,11 +1,11 @@
 {
-  "version": "0.2.6",
+  "version": "0.2.7",
   "notes": "Plugin Store Overhaul, DevTools Support, and Spotify Playlist Import Fix.",
   "pub_date": "2026-05-21T00:15:00+08:00",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHVLZWZqUkdQdkE0Wk5RTGpxbnhUVmlRaUdENkdFeEtLalJRN3gxYmI0SE9GUmRCTXEvRDc1ZmlYVkEveTVZVUZNNnB3YTY5WGNqTXlITEZGSDVUYlFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5Mjk1Mzc4CWZpbGU6U3BvdERMIEdVSV8wLjIuNl94NjQtc2V0dXAuZXhlCit5RXBUeXk2cUJsL285TSsvY2Eza2p6NXpsRlhhUFNTNVlhakdPU2sydS9kRkEvNmthbkQwTzZaVHRWQ3E3c3lIWGtSc05oMlFFc3lLU0s5Yi8xeURnPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.6/SpotDL.GUI_0.2.6_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHRjdHRFQm5udzhIc2djYnRMempGQjdtaDBTQXlBVStmd3lPcnJGOWFtMnFkeDF6cS9jS1lWZ0I2ZlhqTmhIcC9XMzA5L2txRmZMbTdtQWdCUCtnUVE4PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5MzQ3OTAyCWZpbGU6U3BvdERMIEdVSV8wLjIuN194NjQtc2V0dXAuZXhlCmhQQmxjandCeFIwdlNJS2o2RWtVS1orQVVsaGFtemJHWERISi9vYWtTRlNHalR6M1J5SFkvcXNOazU1a2w0ZTFGQzJhWERoVVVlM2EzdkFHT3RlREFRPT0K",
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.7/SpotDL.GUI_0.2.7_x64-setup.exe"
     }
   }
 }
