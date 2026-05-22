@@ -573,28 +573,3 @@ export function setSettingsStatus(msg, kind) {
     if (kind) settingsStatus.classList.add(kind);
 }
 
-function formatBytesShort(bytes) {
-    if (!Number.isFinite(bytes) || bytes <= 0) return "0 Bytes";
-    const k = 1024;
-    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
-    const i = Math.min(
-        sizes.length - 1,
-        Math.floor(Math.log(bytes) / Math.log(k)),
-    );
-    return `${parseFloat((bytes / k ** i).toFixed(2))} ${sizes[i]}`;
-}
-
-export async function updateCacheUsage() {
-    const usageEl = document.getElementById("cache-usage-text");
-    if (!usageEl) return;
-    try {
-        const sizeBytes = await invoke("get_cache_size");
-        usageEl.textContent = `Total size: ${formatBytesShort(sizeBytes)}`;
-        usageEl.classList.remove("is-error");
-    } catch (err) {
-        usageEl.textContent = `Cache size unavailable`;
-        usageEl.classList.add("is-error");
-        console.error("Failed to update cache usage:", err);
-    }
-}
-

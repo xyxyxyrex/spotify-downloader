@@ -50,7 +50,6 @@ import {
 import {
     loadSettingsUI,
     setupSettings,
-    updateCacheUsage,
 } from "./components/settings.js";
 import {
     fetchiTunesCoverArt,
@@ -6950,6 +6949,20 @@ function formatBytes(bytes, decimals = 2) {
     const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + " " + sizes[i];
+}
+
+async function updateCacheUsage() {
+    const usageEl = document.getElementById("cache-usage-text");
+    if (!usageEl) return;
+    try {
+        const sizeBytes = await invoke("get_cache_size");
+        usageEl.textContent = `Total size: ${formatBytes(sizeBytes)}`;
+        usageEl.classList.remove("is-error");
+    } catch (err) {
+        usageEl.textContent = `Cache size unavailable`;
+        usageEl.classList.add("is-error");
+        console.error("Failed to update cache usage:", err);
+    }
 }
 
 async function updateDownloadsUsage() {

@@ -491,7 +491,14 @@ def main() -> None:
             out = resolve_query(q)
         print(json.dumps(out))
     except Exception as exc:
-        print(json.dumps({"error": str(exc)}))
+        debug_info = {
+            "error": str(exc),
+            "__file__": __file__,
+            "resolved_ROOT": str(Path(__file__).resolve().parents[2]),
+            "sys_path": sys.path,
+            "cwd": os.getcwd()
+        }
+        print(json.dumps({"error": f"{str(exc)} | Debug Info: {json.dumps(debug_info)}"}))
         sys.exit(1)
 
 

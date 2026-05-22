@@ -39,15 +39,19 @@ def freeze_script(script_name):
         subprocess.check_call([sys.executable, "-m", "pip", "install", "pyinstaller"])
 
     # Run PyInstaller
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     cmd = [
         "pyinstaller",
         "--onefile",
+        "--paths", repo_root,
         "--distpath", BIN_DIR,
         "--workpath", os.path.join(os.path.dirname(__file__), "build"),
         "--specpath", os.path.dirname(__file__),
         "--clean",
-        script_path
     ]
+    if script_name == "spotify_query":
+        cmd.extend(["--collect-data", "tls_client", "--collect-data", "pykakasi"])
+    cmd.append(script_path)
     
     print(f"Running command: {' '.join(cmd)}")
     subprocess.check_call(cmd)
@@ -109,10 +113,21 @@ def download_and_extract_ffmpeg():
 def main():
     ensure_bin_dir()
     
-    # Download precompiled binaries
-    download_file(YT_DLP_URL, "yt-dlp.exe")
-    download_file(SPOTDL_URL, "spotdl.exe")
-    download_and_extract_ffmpeg()
+    # Download precompiled binaries if missing
+    if not os.path.exists(os.path.join(BIN_DIR, "yt-dlp.exe")):
+        download_file(YT_DLP_URL, "yt-dlp.exe")
+    else:
+        print("yt-dlp.exe already exists, skipping download.")
+        
+    if not os.path.exists(os.path.join(BIN_DIR, "spotdl.exe")):
+        download_file(SPOTDL_URL, "spotdl.exe")
+    else:
+        print("spotdl.exe already exists, skipping download.")
+        
+    if not (os.path.exists(os.path.join(BIN_DIR, "ffmpeg.exe")) and os.path.exists(os.path.join(BIN_DIR, "ffprobe.exe"))):
+        download_and_extract_ffmpeg()
+    else:
+        print("ffmpeg/ffprobe already exist, skipping download.")
     
     # Freeze python scripts
     freeze_script("spotify_query")
