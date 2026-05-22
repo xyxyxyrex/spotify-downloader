@@ -1,11 +1,11 @@
 {
-  "version": "0.2.9",
-  "notes": "Auto-Healing Metadata Sync, High-Sensitivity Sidebar Collages, Cover Art Validation, Premium Drag & Drop, and Playlist Download Optimizations.",
-  "pub_date": "2026-05-22T23:15:00+08:00",
+  "version": "0.3.0",
+  "notes": "Frictionless Single-Click User Space Setup, Screensaver Synced Lyrics Overhaul, Date Layout Stabilization, and Vertical Container Expansion.",
+  "pub_date": "2026-05-23T05:20:00+08:00",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MG4wQ2EvNUUvMFp0UUVzQzUvK0RJcEJqN0gwaWRsRFVyRmdPOVc4T2VETC80SmIvTURZMzlVUHRnb1BVaTVWbFhlMGZxY1hLaURMR21nVEZtZXp1UEFjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NDY0NjI0CWZpbGU6U3BvdERMIEdVSV8wLjIuOV94NjQtc2V0dXAuZXhlCnJ5S3FWUlgwL0ZDYUtBR2k5L2lWeEhON1RUTzF5aUcrWG9ybU9ZMnRoQ2tacHRhSHdjY25vRmdid1hEU3ZwLy9IQUEvbWdzSERhTmVDZU1qRjRaWkFBPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.2.9/SpotDL.GUI_0.2.9_x64-setup.exe"
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.0/SpotDL%20GUI_0.3.0_x64-setup.exe"
     }
   }
 }

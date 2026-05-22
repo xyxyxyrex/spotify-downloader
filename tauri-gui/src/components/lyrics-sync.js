@@ -66,8 +66,8 @@ function buildLyricsHeader(payload, mode) {
     // Dynamic descriptive tooltips and pill classes
     const pillText = syncedAvailable ? sourceLabel : `${sourceLabel} (PLAIN ONLY)`;
     const pillClass = syncedAvailable ? "lyrics-source-pill" : "lyrics-source-pill plain-only";
-    const pillTitle = syncedAvailable 
-        ? "Lyrics loaded successfully with time synchronization." 
+    const pillTitle = syncedAvailable
+        ? "Lyrics loaded successfully with time synchronization."
         : "Synced timing not found. Only plain text lyrics are available for this track.";
 
     return `
@@ -120,14 +120,14 @@ function buildSyncedMarkup(payload, rootId) {
     return `
         <div class="synced-lyrics-list" data-synced-lyrics-list data-root-id="${escapeHtml(rootId)}">
             ${lines
-                .map(
-                    (line) => `
+            .map(
+                (line) => `
                         <div class="synced-lyric-line" data-lyrics-time="${line.time}" data-line-index="${line.index}">
                             <span class="synced-lyric-text">${escapeHtml(line.text)}</span>
                         </div>
                     `,
-                )
-                .join("")}
+            )
+            .join("")}
         </div>
     `;
 }
@@ -174,8 +174,8 @@ function renderLyricsPanel(containerId) {
                 currentMode === "synced"
                     ? "plain"
                     : syncedAvailable
-                      ? "synced"
-                      : "plain";
+                        ? "synced"
+                        : "plain";
             setLyricsMode(nextMode);
         });
 
@@ -196,8 +196,8 @@ function renderLyricsPanel(containerId) {
                     currentMode === "synced"
                         ? "plain"
                         : syncedAvailable
-                          ? "synced"
-                          : "plain";
+                            ? "synced"
+                            : "plain";
                 setLyricsMode(nextMode);
             }
         });
@@ -290,13 +290,17 @@ function syncLyricsPlayback(currentTime) {
         if (prevActive !== String(activeIndex)) {
             const isInitial = prevActive === undefined || prevActive === null || !root.hasAttribute("data-active-lyrics-index");
             root?.setAttribute("data-active-lyrics-index", String(activeIndex));
-            if (isInitial) {
-                setTimeout(() => {
-                    activeLine.scrollIntoView({ block: "center", behavior: "auto" });
-                }, 50);
-            } else {
-                activeLine.scrollIntoView({ block: "center", behavior: "smooth" });
-            }
+
+            // Safely scroll within the container list (.synced-lyrics-list) without triggering native browser scrollIntoView shifting
+            const containerHeight = list.clientHeight;
+            const lineOffsetTop = activeLine.offsetTop;
+            const lineHeight = activeLine.clientHeight;
+            const targetScrollTop = lineOffsetTop - (containerHeight / 2) + (lineHeight / 2);
+
+            list.scrollTo({
+                top: targetScrollTop,
+                behavior: isInitial ? "auto" : "smooth"
+            });
         }
     });
 }

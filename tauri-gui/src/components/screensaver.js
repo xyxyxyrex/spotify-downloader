@@ -211,8 +211,8 @@ export function openPureFullscreenLyrics() {
         updateScreensaverUI();
         resetScreensaverCursorTimer();
 
-        if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((e) => {
+        if (ssOverlay.requestFullscreen) {
+            ssOverlay.requestFullscreen().catch((e) => {
                 console.warn("Fullscreen request rejected:", e);
             });
         }
@@ -231,8 +231,8 @@ export function toggleFullscreenScreensaver() {
         updateScreensaverUI();
         resetScreensaverCursorTimer();
 
-        if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((e) => {
+        if (ssOverlay.requestFullscreen) {
+            ssOverlay.requestFullscreen().catch((e) => {
                 console.warn("Fullscreen request rejected:", e);
             });
         }

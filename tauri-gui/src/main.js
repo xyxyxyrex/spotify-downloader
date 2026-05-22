@@ -259,10 +259,10 @@ function updateDiscordPresence(song, paused = false) {
             imageUrl: song.image || null,
             paused,
         },
-    }).catch(() => {});
+    }).catch(() => { });
 }
 function clearDiscordPresence() {
-    invoke("discord_clear_presence").catch(() => {});
+    invoke("discord_clear_presence").catch(() => { });
 }
 let metadataRequestId = 0;
 let lyricsRequestId = 0;
@@ -789,7 +789,7 @@ function promptSaveQueueAsPlaylist() {
         showModal(
             "Save Queue",
             "<p>The queue is empty!</p>",
-            () => {},
+            () => { },
             "OK",
             false,
         );
@@ -817,7 +817,7 @@ function promptSaveQueueAsPlaylist() {
                 showModal(
                     "Invalid Name",
                     "<p>Playlist name cannot be empty!</p>",
-                    () => {},
+                    () => { },
                     "OK",
                     false,
                 );
@@ -864,9 +864,9 @@ async function updateQueueRecommendations(force = false) {
                 );
                 const randomRecent =
                     historyList[
-                        Math.floor(
-                            Math.random() * Math.min(5, historyList.length),
-                        )
+                    Math.floor(
+                        Math.random() * Math.min(5, historyList.length),
+                    )
                     ];
                 if (randomRecent) {
                     seedSong = {
@@ -2291,8 +2291,8 @@ function downloadTrackKey(song) {
     return `${String(song.artist || "")
         .trim()
         .toLowerCase()}|${String(song.title || "")
-        .trim()
-        .toLowerCase()}`;
+            .trim()
+            .toLowerCase()}`;
 }
 
 function isSongDownloaded(song) {
@@ -2352,8 +2352,8 @@ async function loadAudioFileAsBlob(filePath) {
         ext === "m4a"
             ? "audio/mp4"
             : ext === "ogg"
-              ? "audio/ogg"
-              : "audio/mpeg";
+                ? "audio/ogg"
+                : "audio/mpeg";
     return URL.createObjectURL(
         new Blob([new Uint8Array(bytes)], { type: mime }),
     );
@@ -2498,7 +2498,7 @@ async function seekLiveStreamAtRatio(ratio) {
     if (!currentSong || !isLivePlaybackActive()) return;
 
     if (seekViaCachePromise) {
-        await seekViaCachePromise.catch(() => {});
+        await seekViaCachePromise.catch(() => { });
     }
 
     const playId = activePlayId;
@@ -2826,10 +2826,10 @@ function renderDownloadsActivity() {
         queuedCount > 0 && activeCount > 0
             ? `${activeCount} active, ${queuedCount} queued`
             : queuedCount > 0
-              ? `${queuedCount} queued`
-              : entries.length === 1
-                ? "1 track in progress"
-                : `${entries.length} tracks in progress`;
+                ? `${queuedCount} queued`
+                : entries.length === 1
+                    ? "1 track in progress"
+                    : `${entries.length} tracks in progress`;
     list.innerHTML = "";
 
     entries
@@ -2953,7 +2953,7 @@ async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
             const currentIndex = nextIndex;
             nextIndex += 1;
             const song = queue[currentIndex];
-            
+
             const key = downloadTrackKey(song);
             if (cancelledDownloads.has(key)) {
                 clearSongDownloadActivity(song);
@@ -3231,7 +3231,7 @@ function setupPlayer() {
     audioPlayer.addEventListener("loadedmetadata", () => {
         timeTotal.textContent = formatTime(audioPlayer.duration);
         syncLyricsPlayback(audioPlayer.currentTime);
-        
+
         // Auto-heal missing metadata in playlists using actual playing file metadata
         const durationSecs = Math.round(audioPlayer.duration);
         if (durationSecs > 0 && currentSong) {
@@ -3540,7 +3540,7 @@ function initAudioVisualizer() {
                     getComputedStyle(document.documentElement)
                         .getPropertyValue("--accent")
                         .trim() || "#1db954";
-            } catch (e) {}
+            } catch (e) { }
 
             const barWidth = 3;
             let x = 0;
@@ -3573,28 +3573,28 @@ function clearActiveDragGhost() {
         if (activeCustomDrag.ghostEl) {
             try {
                 activeCustomDrag.ghostEl.remove();
-            } catch (e) {}
+            } catch (e) { }
         }
         try {
             activeCustomDrag.element.classList.remove("dragging");
-        } catch (e) {}
+        } catch (e) { }
         activeCustomDrag = null;
     }
     document.querySelectorAll(".drag-ghost").forEach((el) => {
         try {
             el.remove();
-        } catch (e) {}
+        } catch (e) { }
     });
     document.querySelectorAll("#playlist-list li").forEach((li) => {
         try {
             li.classList.remove("drag-over");
-        } catch (e) {}
+        } catch (e) { }
     });
 }
 
 function createCustomDragGhost(drag, x, y) {
     document.querySelectorAll(".drag-ghost").forEach((el) => {
-        try { el.remove(); } catch (err) {}
+        try { el.remove(); } catch (err) { }
     });
 
     const ghost = document.createElement("div");
@@ -3784,7 +3784,7 @@ function makePlaylistDroppable(element, playlistId) {
             const raw = e.dataTransfer.getData("text/plain");
             if (!raw) return;
             const data = JSON.parse(raw);
-            
+
             const songs = data.songs || (data.song ? [data.song] : []);
             if (songs.length === 0) return;
 
@@ -4640,7 +4640,7 @@ export function applyTheme(themeName, customCssCode) {
             customThemes = JSON.parse(
                 localStorage.getItem("app-custom-themes") || "[]",
             );
-        } catch (e) {}
+        } catch (e) { }
         const theme = customThemes.find((t) => t.id === themeId);
         if (theme) {
             generatedCss = theme.css + "\n";
@@ -4672,7 +4672,7 @@ export function refreshThemeOptions() {
         customThemes = JSON.parse(
             localStorage.getItem("app-custom-themes") || "[]",
         );
-    } catch (e) {}
+    } catch (e) { }
 
     customThemes.forEach((theme) => {
         const option = document.createElement("option");
@@ -5694,7 +5694,7 @@ function saveLastPlayedSession(song) {
         const cachePath =
             song.cache_path ||
             (currentStreamData?.file_path &&
-            !String(currentStreamData.file_path).startsWith("http")
+                !String(currentStreamData.file_path).startsWith("http")
                 ? currentStreamData.file_path
                 : null);
         const duration =
@@ -5740,9 +5740,9 @@ function addToRecentlyPlayed(song) {
             (item) =>
                 !(
                     String(item.title).toLowerCase() ===
-                        String(song.title).toLowerCase() &&
+                    String(song.title).toLowerCase() &&
                     String(item.artist).toLowerCase() ===
-                        String(song.artist).toLowerCase()
+                    String(song.artist).toLowerCase()
                 ),
         );
 
@@ -5971,9 +5971,9 @@ function updateRecentlyPlayedImage(song, newImageUrl) {
         list = list.map((item) => {
             if (
                 String(item.title).toLowerCase() ===
-                    String(song.title).toLowerCase() &&
+                String(song.title).toLowerCase() &&
                 String(item.artist).toLowerCase() ===
-                    String(song.artist).toLowerCase()
+                String(song.artist).toLowerCase()
             ) {
                 item.image = newImageUrl;
                 updated = true;
@@ -6127,7 +6127,7 @@ async function downloadSongWithMetadata(song) {
         setSongDownloadActivity(song, "Downloading audio");
         const query = `${song.title} ${song.artist}`;
         const streamInfo = await invoke("stream_song", { query });
-        
+
         if (cancelledDownloads.has(key)) {
             throw new Error("Cancelled");
         }
@@ -6172,7 +6172,7 @@ async function downloadSongWithMetadata(song) {
              <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">
                 Please verify the track details or check your internet connection and try again.
              </p>`,
-            () => {},
+            () => { },
             "Close",
             false,
         );
@@ -6640,7 +6640,7 @@ async function openPlaylistView(playlistId) {
     const headerArtEl = document.getElementById("playlist-view-art");
     if (headerArtEl) {
         renderPlaylistArt(pl, headerArtEl, 80);
-        
+
         if (isLikedPlaylist(playlistId)) {
             headerArtEl.classList.add("liked-songs-art");
             headerArtEl.onclick = null;
@@ -6653,12 +6653,12 @@ async function openPlaylistView(playlistId) {
                     fileInput.onchange = (event) => {
                         const file = event.target.files[0];
                         if (!file) return;
-                        
+
                         const validMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
                         const validExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"];
                         const extension = file.name.includes(".") ? file.name.substring(file.name.lastIndexOf(".")).toLowerCase() : "";
                         const isValidType = validMimeTypes.includes(file.type) || validExtensions.includes(extension);
-                        
+
                         if (!isValidType) {
                             showModal(
                                 "Unsupported Image Format",
@@ -6677,11 +6677,11 @@ async function openPlaylistView(playlistId) {
                             );
                             return;
                         }
-                        
+
                         const reader = new FileReader();
-                        reader.onload = function(e) {
+                        reader.onload = function (e) {
                             const img = new Image();
-                            img.onload = function() {
+                            img.onload = function () {
                                 const canvas = document.createElement("canvas");
                                 const maxDim = 400;
                                 let width = img.width;
@@ -6699,7 +6699,7 @@ async function openPlaylistView(playlistId) {
                                 canvas.height = height;
                                 const ctx = canvas.getContext("2d");
                                 ctx.drawImage(img, 0, 0, width, height);
-                                
+
                                 const base64Data = canvas.toDataURL("image/jpeg", 0.85);
                                 pl.custom_image = base64Data;
                                 persistPlaylists().then(() => {
@@ -7218,7 +7218,7 @@ async function pickAndApplyStorageDir(kind) {
         showModal(
             "Invalid folder",
             `<p>${escapeHtml(String(err))}</p>`,
-            () => {},
+            () => { },
             "Close",
             false,
         );
@@ -7366,7 +7366,7 @@ document
                     showModal(
                         "Error",
                         `<p>Could not delete downloads: ${escapeHtml(err)}</p>`,
-                        () => {},
+                        () => { },
                         "Close",
                         false,
                     );
@@ -7512,7 +7512,7 @@ async function renderDownloadsList(searchQuery = "") {
                             showModal(
                                 "Error Deleting File",
                                 `<p>Failed to delete: ${escapeHtml(String(err))}</p>`,
-                                () => {},
+                                () => { },
                                 "Close",
                                 false,
                             );
@@ -8004,8 +8004,8 @@ function openPureFullscreenLyrics() {
         updateScreensaverUI();
         resetScreensaverCursorTimer();
 
-        if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((e) => {
+        if (ssOverlay.requestFullscreen) {
+            ssOverlay.requestFullscreen().catch((e) => {
                 console.warn("Fullscreen request rejected:", e);
             });
         }
@@ -8024,8 +8024,8 @@ function toggleFullscreenScreensaver() {
         updateScreensaverUI();
         resetScreensaverCursorTimer();
 
-        if (document.documentElement.requestFullscreen) {
-            document.documentElement.requestFullscreen().catch((e) => {
+        if (ssOverlay.requestFullscreen) {
+            ssOverlay.requestFullscreen().catch((e) => {
                 console.warn("Fullscreen request rejected:", e);
             });
         }

@@ -85,7 +85,7 @@ jobs:
               const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
               manifest.version = '$VERSION';
               manifest.platforms['windows-x86_64'].signature = '$SIG_CONTENT';
-              manifest.platforms['windows-x86_64'].url = 'https://github.com/xyxyxyrex/spotify-downloader/releases/download/v$VERSION/SpotDL.GUI_${VERSION}_x64-setup.exe';
+              manifest.platforms['windows-x86_64'].url = 'https://github.com/xyxyxyrex/spotify-downloader/releases/download/v$VERSION/SpotDL%20GUI_${VERSION}_x64-setup.exe';
               fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
             "
             
