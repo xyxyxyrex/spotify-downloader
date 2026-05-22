@@ -4165,7 +4165,7 @@ dependencies = [
 
 [[package]]
 name = "tauri-gui"
-version = "0.2.8"
+version = "0.2.9"
 dependencies = [
  "axum",
  "dirs 5.0.1",

@@ -266,12 +266,21 @@ nav a.active {
 }
 
 #playlist-list li {
-    padding: 8px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    margin: 2px 8px;
+    border-radius: 6px;
     color: var(--fg-muted);
     cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    border-left: 4px solid transparent;
 }
 
 #playlist-list li:hover {
+    background: var(--bg-hover, rgba(255, 255, 255, 0.05));
     color: var(--fg);
 }
 
@@ -1817,15 +1826,10 @@ h2 {
     color: var(--accent);
 }
 
-#playlist-list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-}
-
 #playlist-list li.active {
+    background: rgba(255, 255, 255, 0.08);
     color: var(--accent);
+    font-weight: 500;
 }
 
 .pl-del-btn {
@@ -1932,6 +1936,8 @@ h2 {
     border-radius: 6px;
     background: var(--bg-panel);
     border: 1px solid var(--border);
+    max-height: 420px;
+    overflow-y: auto;
 }
 
 .downloads-table tbody tr {
@@ -1987,6 +1993,9 @@ h2 {
 .downloads-active-list {
     display: grid;
     gap: 10px;
+    max-height: 280px;
+    overflow-y: auto;
+    padding-right: 6px;
 }
 
 .downloads-active-item {
@@ -2017,6 +2026,34 @@ h2 {
     flex-direction: column;
     gap: 2px;
     margin-bottom: 10px;
+    padding-right: 28px;
+}
+
+.downloads-active-cancel-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.2s ease, background 0.2s ease, transform 0.2s ease;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    z-index: 2;
+}
+
+.downloads-active-cancel-btn:hover {
+    color: #ff4d4d;
+    background: rgba(255, 77, 77, 0.1);
+    transform: scale(1.1);
 }
 
 .downloads-active-title {
@@ -3423,9 +3460,9 @@ h2 {
 #playlist-list li.drag-over {
     background: rgba(29, 185, 84, 0.15) !important;
     border-left: 4px solid var(--accent) !important;
-    padding-left: 12px;
     color: var(--accent) !important;
-    transition: all 0.15s ease;
+    transform: scale(1.02);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .song-item[draggable="true"],
@@ -3444,6 +3481,10 @@ h2 {
 .drag-ghost {
     pointer-events: none !important;
     user-select: none !important;
+}
+
+body.dragging-active #playlist-list li * {
+    pointer-events: none !important;
 }
 
 /* --- Profile Page Aesthetics --- */
@@ -3580,6 +3621,33 @@ h2 {
     width: 100%;
     height: 100%;
     overflow: visible !important;
+}
+
+/* Small collage grid optimizations (for tiny sidebar playlist thumbnails) */
+.playlist-collage-grid.small-collage {
+    gap: 1px !important;
+    padding: 0 !important;
+    background: transparent !important;
+    overflow: hidden !important;
+}
+
+.playlist-collage-grid.small-collage .playlist-collage-card {
+    transform: none !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    filter: none !important;
+    transition: none !important;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.playlist-collage-grid.small-collage .playlist-collage-card:hover,
+#playlist-list li:hover .small-collage .playlist-collage-card {
+    transform: none !important;
+    filter: none !important;
+    box-shadow: none !important;
+    z-index: auto !important;
 }
 
 /* Premium Smooth Hover Pop-out Animations (Refined, Controlled Fan-out) */
@@ -3732,7 +3800,7 @@ h2 {
     width: 82%;
     max-width: 1300px;
     gap: 80px;
-    height: 75%;
+    height: auto;
 }
 
 /* Song Details Section */
@@ -3807,7 +3875,7 @@ h2 {
     justify-content: center;
     border-left: 1px solid rgba(255, 255, 255, 0.12);
     padding-left: 60px;
-    height: 70%;
+    height: auto;
 }
 
 .screensaver-clock {
@@ -5221,4 +5289,189 @@ h2 {
 #fullscreen-screensaver.pure-lyrics-mode .fullscreen-lyrics-panel .synced-lyric-line.is-active {
     font-weight: 800 !important;
     text-shadow: 0 0 25px var(--accent);
+}
+
+/* ==========================================================================
+   PREMIUM SKELETON LOADERS (v0.2.9 UI/UX Upgrade)
+   ========================================================================== */
+
+@keyframes skeleton-shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.skeleton-shimmer {
+    background: linear-gradient(
+        90deg,
+        rgba(255, 255, 255, 0.02) 25%,
+        rgba(255, 255, 255, 0.09) 50%,
+        rgba(255, 255, 255, 0.02) 75%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.4s infinite linear;
+    border-radius: 4px;
+    display: inline-block;
+}
+
+/* Specific custom layouts for flawless skeleton alignment */
+.skeleton-song-item {
+    pointer-events: none;
+    border-bottom: 1px dashed var(--border);
+}
+
+.skeleton-song-item .item-art {
+    background: transparent !important;
+}
+
+.skeleton-song-tile {
+    pointer-events: none;
+}
+
+.skeleton-song-tile .tile-art {
+    background: transparent !important;
+}
+
+/* Lyrics Loader Card mimicking the active lyric component */
+.skeleton-lyrics-container {
+    padding: 14px;
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.skeleton-lyrics-line {
+    height: 12px;
+    border-radius: 4px;
+}
+
+/* Metadata DT/DD loading layout matches perfectly with detail sidebar lists */
+.skeleton-meta-list {
+    margin: 0;
+}
+
+.skeleton-meta-list dt {
+    margin-top: 10px;
+}
+
+.skeleton-meta-list dd {
+    margin: 4px 0 0;
+}
+
+/* Subtle fade pulsing to combine with shimmer for ultra-premium feel */
+@keyframes skeleton-pulse {
+    0%, 100% {
+        opacity: 0.95;
+    }
+    50% {
+        opacity: 0.65;
+    }
+}
+
+.skeleton-pulse-wrap {
+    animation: skeleton-pulse 2s infinite ease-in-out;
+}
+
+/* Screensaver Lyrics Fade-In Transition (Nice UI/UX micro-interaction) */
+@keyframes ss-lyrics-fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.fullscreen-lyrics-panel:not(.hidden) {
+    animation: ss-lyrics-fade-in 0.55s cubic-bezier(0.19, 1, 0.22, 1) forwards;
+}
+
+/* Custom Cover Art Interactive Overlay styling */
+.playlist-header-art {
+    position: relative;
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.playlist-header-art:hover {
+    transform: scale(1.04);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45) !important;
+}
+
+.playlist-header-art::after {
+    content: "EDIT";
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.22s ease-in-out;
+    border-radius: inherit;
+    color: #ffffff;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    font-family: monospace;
+}
+
+.playlist-header-art:hover::after {
+    opacity: 1;
+}
+
+/* Disabled hover overlay for system reserved playlists (Liked Songs) */
+.playlist-header-art.liked-songs-art {
+    cursor: default;
+}
+.playlist-header-art.liked-songs-art:hover {
+    transform: none;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3) !important;
+}
+.playlist-header-art.liked-songs-art::after {
+    display: none !important;
+}
+
+/* Sidebar Playlist Art Thumbnail */
+.pl-sidebar-art-thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-card);
+    flex-shrink: 0;
+    position: relative;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s ease;
+}
+
+#playlist-list li:hover .pl-sidebar-art-thumb {
+    transform: scale(1.05);
+}
+
+/* Ensure text label scales and flows beautifully */
+.pl-label {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Hide legacy text heart since we have the premium thumbnail */
+#playlist-list li.pl-liked .pl-label::before {
+    display: none !important;
 }

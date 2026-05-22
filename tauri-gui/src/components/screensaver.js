@@ -15,6 +15,7 @@ import { renderLyricsPanel } from "./lyrics-sync.js";
 
 let screensaverInterval = null;
 let screensaverCursorTimeout = null;
+let ssLyricsVisible = false;
 const SCREENSAVER_TIME_FORMAT_KEY = "spotdl_screensaver_time_format";
 
 function getScreensaverTimeFormat() {
@@ -183,7 +184,21 @@ export async function updateScreensaverUI() {
         }
     }
 
-    renderLyricsPanel("fullscreen-lyrics");
+    const lyricsPanel = document.getElementById("fullscreen-lyrics");
+    if (lyricsPanel) {
+        const isPureLyrics = ssOverlay.classList.contains("pure-lyrics-mode");
+        if (ssLyricsVisible || isPureLyrics) {
+            lyricsPanel.classList.remove("hidden");
+            renderLyricsPanel("fullscreen-lyrics");
+        } else {
+            lyricsPanel.classList.add("hidden");
+        }
+    }
+
+    const ssLyricsToggle = document.getElementById("ss-btn-lyrics-toggle");
+    if (ssLyricsToggle) {
+        ssLyricsToggle.classList.toggle("active", ssLyricsVisible || ssOverlay.classList.contains("pure-lyrics-mode"));
+    }
 }
 
 export function openPureFullscreenLyrics() {
@@ -211,6 +226,7 @@ export function toggleFullscreenScreensaver() {
     ssOverlay.classList.remove("pure-lyrics-mode");
     if (ssOverlay.classList.contains("hidden")) {
         ssOverlay.classList.remove("hidden");
+        ssLyricsVisible = false; // Disabled by default in screensaver mode
         startScreensaverClock();
         updateScreensaverUI();
         resetScreensaverCursorTimer();
@@ -321,6 +337,21 @@ export function initScreensaverEvents() {
             e.stopPropagation();
             const btnLoop = document.getElementById("btn-loop");
             if (btnLoop) btnLoop.click();
+        });
+    }
+
+    const ssLyricsToggle = document.getElementById("ss-btn-lyrics-toggle");
+    if (ssLyricsToggle) {
+        ssLyricsToggle.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const ssOverlay = document.getElementById("fullscreen-screensaver");
+            if (ssOverlay && ssOverlay.classList.contains("pure-lyrics-mode")) {
+                ssOverlay.classList.remove("pure-lyrics-mode");
+                ssLyricsVisible = false;
+            } else {
+                ssLyricsVisible = !ssLyricsVisible;
+            }
+            updateScreensaverUI();
         });
     }
 

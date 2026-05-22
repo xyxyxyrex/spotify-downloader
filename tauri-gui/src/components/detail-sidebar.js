@@ -31,6 +31,31 @@ const { invoke } = window.__TAURI__.core;
 let lyricsRequestId = 0;
 let metadataRequestId = 0;
 
+function getMetadataSkeletonHTML() {
+    return `
+        <dl class="skeleton-meta-list skeleton-pulse-wrap">
+            <dt><span class="skeleton-shimmer" style="width: 35%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 60%; height: 12px;"></span></dd>
+            <dt><span class="skeleton-shimmer" style="width: 50%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 80%; height: 12px;"></span></dd>
+            <dt><span class="skeleton-shimmer" style="width: 30%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 45%; height: 12px;"></span></dd>
+        </dl>
+    `;
+}
+
+function getLyricsSkeletonHTML() {
+    return `
+        <div class="skeleton-lyrics-container skeleton-pulse-wrap">
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 85%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 70%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 90%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 60%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 75%;"></div>
+        </div>
+    `;
+}
+
 export async function showDetailSidebarPreview(song) {
     setDetailSidebarSong(song);
     updateDetailLikeButton();
@@ -49,10 +74,9 @@ export async function showDetailSidebarPreview(song) {
 
     setDetailArtistAlbum(song.artist, song.album);
     if (detailMeta) {
-        detailMeta.innerHTML =
-            '<p class="detail-meta-loading">Loading metadata…</p>';
+        detailMeta.innerHTML = getMetadataSkeletonHTML();
     }
-    if (detailLyricsEl) detailLyricsEl.textContent = "";
+    if (detailLyricsEl) detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
 
     await resolveTrackCoverUrl(song);
     await setDetailArt(song.image, song.title, song.artist);
@@ -103,6 +127,7 @@ export function drawDetailCanvas(title, artist) {
 export async function loadDetailLyrics(artist, title) {
     const detailLyricsEl = document.getElementById("detail-lyrics");
     if (!detailLyricsEl || !artist || !title) return;
+    detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
 
     const id = ++lyricsRequestId;
     try {

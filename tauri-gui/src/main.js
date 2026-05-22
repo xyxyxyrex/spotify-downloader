@@ -375,6 +375,7 @@ let currentCollection = null;
 let currentCollectionSongs = [];
 let downloadsSearchQuery = "";
 const downloadActivity = new Map(); // key -> { song, stage, startedAt }
+const cancelledDownloads = new Set(); // key -> true for cancelled downloads
 let collectionViewMode =
     localStorage.getItem("collectionViewMode") === "list" ? "list" : "grid";
 /** Where to return when leaving artist/album pages. */
@@ -1897,10 +1898,10 @@ async function openArtistPage(artistName, opts = {}) {
     const albumsEl = document.getElementById("artist-albums-grid");
 
     nameEl.textContent = name;
-    metaEl.textContent = "Loading…";
+    metaEl.innerHTML = '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 140px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
     artEl.innerHTML = "";
-    tracksEl.innerHTML = '<span class="loading-text">Loading tracks…</span>';
-    albumsEl.innerHTML = '<span class="loading-text">Loading albums…</span>';
+    tracksEl.innerHTML = getTrackListSkeletonHTML(5);
+    albumsEl.innerHTML = getAlbumGridSkeletonHTML(4);
 
     try {
         let spotifyUrl = opts.spotifyUrl;
@@ -2106,9 +2107,9 @@ async function openAlbumPage(albumTitle, artistName, opts = {}) {
     artistEl.replaceChildren(
         artist ? artistLinkEl(artist) : document.createTextNode("—"),
     );
-    metaEl.textContent = "Loading…";
+    metaEl.innerHTML = '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 160px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
     artEl.innerHTML = "";
-    tracksEl.innerHTML = '<span class="loading-text">Loading tracks…</span>';
+    tracksEl.innerHTML = getTrackListSkeletonHTML(8);
     selectedGroup = null;
 
     const bindAlbumGroupMenu = () => {
@@ -2862,9 +2863,20 @@ function renderDownloadsActivity() {
             fill.className = "downloads-active-bar-fill";
             bar.appendChild(fill);
 
+            const cancelBtn = document.createElement("button");
+            cancelBtn.type = "button";
+            cancelBtn.className = "downloads-active-cancel-btn";
+            cancelBtn.innerHTML = "&times;";
+            cancelBtn.title = "Cancel Download";
+            cancelBtn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                cancelSingleDownload(entry.song);
+            });
+
             item.appendChild(meta);
             item.appendChild(stage);
             item.appendChild(bar);
+            item.appendChild(cancelBtn);
             list.appendChild(item);
         });
 }
@@ -2889,6 +2901,21 @@ export function clearSongDownloadActivity(song) {
     renderDownloadsActivity();
 }
 
+export function cancelSingleDownload(song) {
+    if (!song) return;
+    const key = downloadTrackKey(song);
+    cancelledDownloads.add(key);
+    clearSongDownloadActivity(song);
+}
+
+export function cancelAllDownloads() {
+    for (const entry of downloadActivity.values()) {
+        const key = downloadTrackKey(entry.song);
+        cancelledDownloads.add(key);
+        clearSongDownloadActivity(entry.song);
+    }
+}
+
 function uniqueSongsByDownloadKey(songs) {
     const seen = new Set();
     const unique = [];
@@ -2903,8 +2930,13 @@ function uniqueSongsByDownloadKey(songs) {
 }
 
 async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
-    const queue = uniqueSongsByDownloadKey(songs);
-    if (!queue.length) return;
+    const queue = uniqueSongsByDownloadKey(songs).filter((song) => !isSongDownloaded(song));
+    if (!queue.length) {
+        statusBar.textContent = songs.length === 1
+            ? "Track is already downloaded locally."
+            : "All tracks are already downloaded locally.";
+        return;
+    }
 
     queue.forEach((song) => setSongDownloadActivity(song, "Queued"));
     statusBar.textContent =
@@ -2921,10 +2953,22 @@ async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
             const currentIndex = nextIndex;
             nextIndex += 1;
             const song = queue[currentIndex];
+            
+            const key = downloadTrackKey(song);
+            if (cancelledDownloads.has(key)) {
+                clearSongDownloadActivity(song);
+                cancelledDownloads.delete(key);
+                continue;
+            }
+
             try {
                 await downloadSongWithMetadata(song);
             } catch (err) {
                 console.error("Failed downloading track", song, err);
+            } finally {
+                if (downloadActivity.size === 0) {
+                    cancelledDownloads.clear();
+                }
             }
         }
     });
@@ -2970,6 +3014,8 @@ async function updateNowPlayingDownloadBadge(song) {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+    document.addEventListener("keydown", handleGlobalKeyDown);
+
     document.addEventListener(
         "contextmenu",
         (e) => {
@@ -3185,6 +3231,48 @@ function setupPlayer() {
     audioPlayer.addEventListener("loadedmetadata", () => {
         timeTotal.textContent = formatTime(audioPlayer.duration);
         syncLyricsPlayback(audioPlayer.currentTime);
+        
+        // Auto-heal missing metadata in playlists using actual playing file metadata
+        const durationSecs = Math.round(audioPlayer.duration);
+        if (durationSecs > 0 && currentSong) {
+            if (!currentSong.duration || currentSong.duration !== durationSecs) {
+                currentSong.duration = durationSecs;
+            }
+            let changed = false;
+            const pls = getPlaylists();
+            for (const pl of pls) {
+                pl.tracks.forEach((track) => {
+                    if (
+                        track.title && currentSong.title &&
+                        track.artist && currentSong.artist &&
+                        track.title.toLowerCase().trim() === currentSong.title.toLowerCase().trim() &&
+                        track.artist.toLowerCase().trim() === currentSong.artist.toLowerCase().trim()
+                    ) {
+                        if (!track.duration_secs || track.duration_secs !== durationSecs) {
+                            track.duration_secs = durationSecs;
+                            changed = true;
+                        }
+                        if (currentSong.album && (!track.album || track.album === "—" || track.album === "-")) {
+                            track.album = currentSong.album;
+                            changed = true;
+                        }
+                        if (currentSong.image && (!track.image || track.image.includes("2a96cbd8b46e442fc41c2b86b821562f"))) {
+                            track.image = currentSong.image;
+                            changed = true;
+                        }
+                    }
+                });
+            }
+            if (changed) {
+                persistPlaylists().then(() => {
+                    const activePlId = getActivePlaylistId();
+                    if (activePlId) {
+                        openPlaylistView(activePlId);
+                    }
+                });
+            }
+        }
+
         if (pendingSeekRatio != null) {
             if (isLivePlaybackActive()) {
                 const ratio = pendingSeekRatio;
@@ -3480,6 +3568,7 @@ function initAudioVisualizer() {
 let activeCustomDrag = null;
 
 function clearActiveDragGhost() {
+    document.body.classList.remove("dragging-active");
     if (activeCustomDrag) {
         if (activeCustomDrag.ghostEl) {
             try {
@@ -3503,58 +3592,112 @@ function clearActiveDragGhost() {
     });
 }
 
-function initCustomDragSystem() {
-    window.addEventListener("mousemove", (e) => {
-        if (!activeCustomDrag) return;
+function createCustomDragGhost(drag, x, y) {
+    document.querySelectorAll(".drag-ghost").forEach((el) => {
+        try { el.remove(); } catch (err) {}
+    });
 
-        if (!activeCustomDrag.dragStarted) {
-            const dx = e.clientX - activeCustomDrag.startX;
-            const dy = e.clientY - activeCustomDrag.startY;
-            if (Math.sqrt(dx * dx + dy * dy) > 8) {
-                activeCustomDrag.dragStarted = true;
+    const ghost = document.createElement("div");
+    ghost.className = "drag-ghost";
+    ghost.style.position = "fixed";
+    ghost.style.pointerEvents = "none";
+    ghost.style.zIndex = "99999";
+    // Slightly offset from the cursor so it never interferes with hit-testing under the pointer
+    ghost.style.left = `${x + 15}px`;
+    ghost.style.top = `${y + 15}px`;
 
-                const ghost = document.createElement("div");
-                ghost.className = "drag-ghost";
-                ghost.style.position = "fixed";
-                ghost.style.pointerEvents = "none";
-                ghost.style.zIndex = "99999";
+    const song = drag.song;
+    const songs = drag.songs || [song];
+    const count = songs.length;
 
-                const song = activeCustomDrag.song;
-                ghost.innerHTML = `
-                    <div class="ghost-content" style="
-                        display: flex;
-                        align-items: center;
-                        gap: 10px;
-                        background: rgba(30, 30, 30, 0.85);
-                        backdrop-filter: blur(10px);
-                        -webkit-backdrop-filter: blur(10px);
-                        border: 1px solid rgba(255, 255, 255, 0.15);
-                        padding: 8px 14px;
-                        border-radius: 8px;
-                        box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-                        color: #ffffff;
-                        font-family: inherit;
-                        font-size: 13px;
-                        transform: translate(-50%, -50%);
-                    ">
-                        <div class="ghost-art" style="width: 32px; height: 32px; border-radius: 4px; overflow: hidden; background: #333; display: flex; align-items: center; justify-content: center;">
-                            ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span style="font-size:10px;">🎵</span>`}
-                        </div>
-                        <div style="display: flex; flex-direction: column; max-width: 180px;">
-                            <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.title)}</span>
-                            <span style="font-size: 11px; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.artist)}</span>
-                        </div>
+    let ghostContentHtml = "";
+    if (count > 1) {
+        ghostContentHtml = `
+            <div class="ghost-content" style="
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background: rgba(30, 30, 30, 0.85);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                padding: 8px 14px;
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 13px;
+                position: relative;
+            ">
+                <div style="position: absolute; top: 4px; left: 4px; right: -4px; bottom: -4px; background: rgba(30,30,30,0.4); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; z-index: -1;"></div>
+                <div style="position: absolute; top: 8px; left: 8px; right: -8px; bottom: -8px; background: rgba(30,30,30,0.2); border: 1px solid rgba(255,255,255,0.04); border-radius: 8px; z-index: -2;"></div>
+
+                <div class="ghost-art" style="width: 32px; height: 32px; border-radius: 4px; overflow: hidden; background: #333; display: flex; align-items: center; justify-content: center; position: relative;">
+                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span style="font-size:10px;">🎵</span>`}
+                    <div style="position: absolute; top: -4px; right: -4px; background: var(--accent, #1db954); color: white; font-size: 9px; font-weight: bold; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 10;">
+                        ${count}
                     </div>
-                `;
-                document.body.appendChild(ghost);
-                activeCustomDrag.ghostEl = ghost;
-                activeCustomDrag.element.classList.add("dragging");
-            }
-        }
+                </div>
+                <div style="display: flex; flex-direction: column; max-width: 180px;">
+                    <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.title)}</span>
+                    <span style="font-size: 11px; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">&amp; ${count - 1} other track${count > 2 ? "s" : ""}</span>
+                </div>
+            </div>
+        `;
+    } else {
+        ghostContentHtml = `
+            <div class="ghost-content" style="
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                background: rgba(30, 30, 30, 0.85);
+                backdrop-filter: blur(10px);
+                -webkit-backdrop-filter: blur(10px);
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                padding: 8px 14px;
+                border-radius: 8px;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+                color: #ffffff;
+                font-family: inherit;
+                font-size: 13px;
+            ">
+                <div class="ghost-art" style="width: 32px; height: 32px; border-radius: 4px; overflow: hidden; background: #333; display: flex; align-items: center; justify-content: center;">
+                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span style="font-size:10px;">🎵</span>`}
+                </div>
+                <div style="display: flex; flex-direction: column; max-width: 180px;">
+                    <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.title)}</span>
+                    <span style="font-size: 11px; opacity: 0.7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.artist)}</span>
+                </div>
+            </div>
+        `;
+    }
 
-        if (activeCustomDrag.dragStarted && activeCustomDrag.ghostEl) {
-            activeCustomDrag.ghostEl.style.left = `${e.clientX}px`;
-            activeCustomDrag.ghostEl.style.top = `${e.clientY}px`;
+    ghost.innerHTML = ghostContentHtml;
+    document.body.appendChild(ghost);
+    drag.ghostEl = ghost;
+}
+
+function initCustomDragSystem() {
+    // Intercept dragover in the capturing phase at window level.
+    // This allows us to call e.preventDefault() before anything else can interfere,
+    // guaranteeing the cursor will show the valid 'copy' or 'move' pointer everywhere.
+    window.addEventListener("dragover", (e) => {
+        if (activeCustomDrag && activeCustomDrag.dragStarted) {
+            e.preventDefault();
+
+            // Select matching drop effect (copy for playlists, move for track reordering)
+            const targetRow = e.target.closest("#playlist-tracks-body tr");
+            if (targetRow && activeCustomDrag.element && activeCustomDrag.element.tagName === "TR") {
+                e.dataTransfer.dropEffect = "move";
+            } else {
+                e.dataTransfer.dropEffect = "copy";
+            }
+
+            if (activeCustomDrag.ghostEl) {
+                // Offset by 15px to bottom-right to prevent the element from blocking standard hit testing
+                activeCustomDrag.ghostEl.style.left = `${e.clientX + 15}px`;
+                activeCustomDrag.ghostEl.style.top = `${e.clientY + 15}px`;
+            }
 
             const under = document.elementFromPoint(e.clientX, e.clientY);
             const targetLi = under?.closest("#playlist-list li");
@@ -3567,52 +3710,8 @@ function initCustomDragSystem() {
                 targetLi.classList.add("drag-over");
             }
         }
-    });
+    }, true);
 
-    window.addEventListener("mouseup", async (e) => {
-        if (!activeCustomDrag) return;
-
-        const drag = activeCustomDrag;
-        activeCustomDrag = null;
-
-        if (drag.ghostEl) {
-            drag.ghostEl.remove();
-        }
-        drag.element.classList.remove("dragging");
-
-        if (drag.dragStarted) {
-            const under = document.elementFromPoint(e.clientX, e.clientY);
-            const targetLi = under?.closest("#playlist-list li");
-            if (targetLi) {
-                targetLi.classList.remove("drag-over");
-
-                const playlistId = targetLi.__playlistId;
-                if (playlistId) {
-                    try {
-                        const song = drag.song;
-                        await addTrackToPlaylist(playlistId, song);
-
-                        if (isLikedPlaylist(playlistId)) {
-                            updateLikeButton();
-                            updateDetailLikeButton();
-                        }
-
-                        if (getActivePlaylistId() === playlistId) {
-                            openPlaylistView(playlistId);
-                        }
-
-                        renderPlaylistSidebar();
-
-                        statusBar.textContent = `Added "${song.title}" to playlist "${getPlaylist(playlistId).name}"`;
-                    } catch (err) {
-                        console.error("Custom drop failed:", err);
-                    }
-                }
-            }
-        }
-    });
-
-    // Clean up if standard browser dragend or drop is triggered
     window.addEventListener("dragend", clearActiveDragGhost);
     window.addEventListener("drop", clearActiveDragGhost);
 }
@@ -3620,6 +3719,15 @@ function initCustomDragSystem() {
 function makeSongDraggable(element, song) {
     element.setAttribute("draggable", "true");
     element.addEventListener("dragstart", (e) => {
+        const img = new Image();
+        img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        e.dataTransfer.setDragImage(img, 0, 0);
+
+        const selectionKey = getSongSelectionKey(song);
+        const isDraggedSelected = isSelectionKeySelected(selectionKey);
+        const selectedSongs = getUniqueSelectedSongs();
+        const payloadSongs = isDraggedSelected ? selectedSongs : [song];
+
         const payload = {
             song: {
                 title: song.title,
@@ -3630,28 +3738,29 @@ function makeSongDraggable(element, song) {
                 spotify_url: song.spotify_url || null,
                 play_count: song.play_count ?? 0,
             },
+            songs: payloadSongs,
         };
         e.dataTransfer.setData("text/plain", JSON.stringify(payload));
         e.dataTransfer.effectAllowed = "copy";
         element.classList.add("dragging");
-    });
-    element.addEventListener("dragend", () => {
-        element.classList.remove("dragging");
-        clearActiveDragGhost();
-    });
-
-    element.addEventListener("mousedown", (e) => {
-        if (e.button !== 0) return;
-        if (e.target.closest("button") || e.target.closest("a")) return;
+        document.body.classList.add("dragging-active");
 
         activeCustomDrag = {
             song: song,
+            songs: payloadSongs,
             element: element,
             ghostEl: null,
-            dragStarted: false,
+            dragStarted: true,
             startX: e.clientX,
             startY: e.clientY,
         };
+
+        createCustomDragGhost(activeCustomDrag, e.clientX, e.clientY);
+    });
+    element.addEventListener("dragend", () => {
+        element.classList.remove("dragging");
+        document.body.classList.remove("dragging-active");
+        clearActiveDragGhost();
     });
 }
 
@@ -3675,10 +3784,15 @@ function makePlaylistDroppable(element, playlistId) {
             const raw = e.dataTransfer.getData("text/plain");
             if (!raw) return;
             const data = JSON.parse(raw);
-            const song = data.song;
-            if (!song?.title || !song?.artist) return;
+            
+            const songs = data.songs || (data.song ? [data.song] : []);
+            if (songs.length === 0) return;
 
-            await addTrackToPlaylist(playlistId, song);
+            for (const song of songs) {
+                if (song?.title && song?.artist) {
+                    await addTrackToPlaylist(playlistId, song);
+                }
+            }
 
             if (isLikedPlaylist(playlistId)) {
                 updateLikeButton();
@@ -3691,7 +3805,11 @@ function makePlaylistDroppable(element, playlistId) {
 
             renderPlaylistSidebar();
 
-            statusBar.textContent = `Added "${song.title}" to playlist "${getPlaylist(playlistId).name}"`;
+            if (songs.length === 1) {
+                statusBar.textContent = `Added "${songs[0].title}" to playlist "${getPlaylist(playlistId).name}"`;
+            } else {
+                statusBar.textContent = `Added ${songs.length} tracks to playlist "${getPlaylist(playlistId).name}"`;
+            }
         } catch (err) {
             console.error("Drop failed:", err);
         }
@@ -3850,14 +3968,13 @@ async function updateDetailSidebarForSong(song) {
     if (song.meta) {
         renderMetadataPanel(song.meta);
     } else if (songNeedsMetadataFetch(song)) {
-        detailMeta.innerHTML =
-            '<p class="detail-meta-loading">Loading metadata…</p>';
+        detailMeta.innerHTML = getMetadataSkeletonHTML();
     } else {
         detailMeta.innerHTML = "";
     }
 
     if (lyricsChanged) {
-        if (detailLyricsEl) detailLyricsEl.textContent = "";
+        if (detailLyricsEl) detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
         loadDetailLyrics(song.artist, song.title);
     }
 
@@ -3981,18 +4098,19 @@ async function renderCollageArt(
 
     if (itemsWithImages.length >= 4) {
         const grid = document.createElement("div");
-        grid.className = "playlist-collage-grid";
+        const isSmall = size < 50;
+        grid.className = "playlist-collage-grid" + (isSmall ? " small-collage" : "");
         grid.style.display = "grid";
         grid.style.gridTemplateColumns = "repeat(2, 1fr)";
         grid.style.gridTemplateRows = "repeat(2, 1fr)";
-        grid.style.gap = "8px";
-        grid.style.padding = "6px";
+        grid.style.gap = isSmall ? "1px" : "8px";
+        grid.style.padding = isSmall ? "0px" : "6px";
         grid.style.width = "100%";
         grid.style.height = "100%";
         grid.style.overflow = "hidden";
         grid.style.borderRadius = "inherit";
         grid.style.boxSizing = "border-box";
-        grid.style.background = "var(--bg-panel)";
+        grid.style.background = isSmall ? "transparent" : "var(--bg-panel)";
 
         const resolves = itemsWithImages
             .slice(0, 4)
@@ -4049,6 +4167,36 @@ async function renderCollageArt(
 }
 
 async function renderPlaylistArt(pl, artEl, size = 168) {
+    if (pl.custom_image) {
+        artEl.innerHTML = "";
+        artEl.style.position = "relative";
+        const img = document.createElement("img");
+        img.src = pl.custom_image;
+        img.alt = pl.name;
+        img.loading = "lazy";
+        img.style.width = "100%";
+        img.style.height = "100%";
+        img.style.objectFit = "cover";
+        img.style.borderRadius = "inherit";
+        artEl.appendChild(img);
+        return;
+    }
+    if (pl.id === "pl_liked_songs") {
+        artEl.innerHTML = "";
+        artEl.style.position = "relative";
+        artEl.style.background = "linear-gradient(135deg, #15943f, var(--accent, #1db954))";
+        artEl.style.display = "flex";
+        artEl.style.alignItems = "center";
+        artEl.style.justifyContent = "center";
+        artEl.style.borderRadius = "inherit";
+        const heart = document.createElement("span");
+        heart.textContent = "♥";
+        heart.style.color = "#fff";
+        heart.style.fontSize = size > 40 ? "2.2rem" : "1.1rem";
+        heart.style.fontWeight = "bold";
+        artEl.appendChild(heart);
+        return;
+    }
     await renderCollageArt(
         pl.tracks,
         artEl,
@@ -5391,6 +5539,73 @@ async function selectAndPlaySong(song, element, queueSongs = null) {
     await playSong(song);
 }
 
+function getMetadataSkeletonHTML() {
+    return `
+        <dl class="skeleton-meta-list skeleton-pulse-wrap">
+            <dt><span class="skeleton-shimmer" style="width: 35%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 60%; height: 12px;"></span></dd>
+            <dt><span class="skeleton-shimmer" style="width: 50%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 80%; height: 12px;"></span></dd>
+            <dt><span class="skeleton-shimmer" style="width: 30%; height: 8px;"></span></dt>
+            <dd><span class="skeleton-shimmer" style="width: 45%; height: 12px;"></span></dd>
+        </dl>
+    `;
+}
+
+function getLyricsSkeletonHTML() {
+    return `
+        <div class="skeleton-lyrics-container skeleton-pulse-wrap">
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 85%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 70%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 90%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 60%;"></div>
+            <div class="skeleton-lyrics-line skeleton-shimmer" style="width: 75%;"></div>
+        </div>
+    `;
+}
+
+function getTrackListSkeletonHTML(count = 5) {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        const titleWidth = 140 + (i % 3) * 30;
+        const artistWidth = 80 + (i % 2) * 20;
+        html += `
+            <div class="song-item skeleton-song-item skeleton-pulse-wrap">
+                <div class="item-art skeleton-shimmer"></div>
+                <div class="song-info">
+                    <span class="song-title">
+                        <span class="skeleton-shimmer" style="width: ${titleWidth}px; height: 14px; display: inline-block;"></span>
+                    </span>
+                    <span class="song-artist">
+                        <span class="skeleton-shimmer" style="width: ${artistWidth}px; height: 11px; display: inline-block;"></span>
+                    </span>
+                </div>
+            </div>
+        `;
+    }
+    return html;
+}
+
+function getAlbumGridSkeletonHTML(count = 4) {
+    let html = '';
+    for (let i = 0; i < count; i++) {
+        const titleWidth = 80 + (i % 3) * 15;
+        const artistWidth = 50 + (i % 2) * 15;
+        html += `
+            <div class="song-tile skeleton-song-tile skeleton-pulse-wrap">
+                <div class="tile-art skeleton-shimmer"></div>
+                <span class="tile-title" style="display: block; text-align: center; margin-top: 8px;">
+                    <span class="skeleton-shimmer" style="width: ${titleWidth}%; height: 13px; display: inline-block;"></span>
+                </span>
+                <span class="tile-artist" style="display: block; text-align: center; margin-top: 4px;">
+                    <span class="skeleton-shimmer" style="width: ${artistWidth}%; height: 11px; display: inline-block;"></span>
+                </span>
+            </div>
+        `;
+    }
+    return html;
+}
+
 async function showDetailSidebarPreview(song) {
     detailSidebarSong = song;
     updateDetailLikeButton();
@@ -5398,9 +5613,8 @@ async function showDetailSidebarPreview(song) {
     detailContent.classList.remove("hidden");
     detailTitle.textContent = song.title;
     setDetailArtistAlbum(song.artist, song.album);
-    detailMeta.innerHTML =
-        '<p class="detail-meta-loading">Loading metadata…</p>';
-    if (detailLyricsEl) detailLyricsEl.textContent = "";
+    detailMeta.innerHTML = getMetadataSkeletonHTML();
+    if (detailLyricsEl) detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
     await setDetailArt(song.image, song.title, song.artist);
     loadDetailLyrics(song.artist, song.title);
 
@@ -5439,6 +5653,7 @@ function drawDetailCanvas(title, artist) {
 
 async function loadDetailLyrics(artist, title) {
     if (!detailLyricsEl || !artist || !title) return;
+    detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
     const id = ++lyricsRequestId;
     try {
         const payload = await invoke("fetch_lyrics_payload", {
@@ -5881,11 +6096,18 @@ async function downloadSongWithMetadata(song) {
     setBuffering(true);
     statusBar.textContent = `Downloading ${song.title}...`;
     setSongDownloadActivity(song, "Fetching metadata");
+    const key = downloadTrackKey(song);
     try {
+        if (cancelledDownloads.has(key)) {
+            throw new Error("Cancelled");
+        }
         await ensureStorageReadyForDownload();
 
         let meta = song.meta;
         if (!meta) {
+            if (cancelledDownloads.has(key)) {
+                throw new Error("Cancelled");
+            }
             meta = await cachedInvoke("fetch_track_metadata", {
                 artist: song.artist,
                 track: song.title,
@@ -5893,12 +6115,22 @@ async function downloadSongWithMetadata(song) {
             song.meta = meta;
         }
 
+        if (cancelledDownloads.has(key)) {
+            throw new Error("Cancelled");
+        }
         await resolveTrackCoverUrl(song, { meta });
         injectCoverIntoMeta(meta, song.image);
 
+        if (cancelledDownloads.has(key)) {
+            throw new Error("Cancelled");
+        }
         setSongDownloadActivity(song, "Downloading audio");
         const query = `${song.title} ${song.artist}`;
         const streamInfo = await invoke("stream_song", { query });
+        
+        if (cancelledDownloads.has(key)) {
+            throw new Error("Cancelled");
+        }
         setSongDownloadActivity(song, "Saving file");
         const savedPath = await invoke("save_song_with_metadata", {
             cachedPath: streamInfo.file_path,
@@ -5916,6 +6148,11 @@ async function downloadSongWithMetadata(song) {
         statusBar.textContent = `Saved: ${savedPath}`;
         return savedPath;
     } catch (e) {
+        if (e.message === "Cancelled") {
+            console.log(`Download for ${song.title} was cancelled.`);
+            cancelledDownloads.delete(key);
+            return;
+        }
         const errText = formatDownloadErrorMessage(e);
         statusBar.textContent = `Error: ${errText}`;
         const isStorageErr =
@@ -6309,13 +6546,6 @@ function setupPlaylists() {
                     }
                     await createPlaylist(name);
                     renderPlaylistSidebar();
-                    homeBrowseCacheKey = getHomeBrowseCacheKey();
-                    if (
-                        views.home &&
-                        !views.home.classList.contains("hidden")
-                    ) {
-                        updateHomePlaylistsRow();
-                    }
                 },
                 "Create",
                 true,
@@ -6360,6 +6590,10 @@ export function renderPlaylistSidebar() {
             showContextMenuAt(e.clientX, e.clientY);
         });
 
+        const artThumb = document.createElement("div");
+        artThumb.className = "pl-sidebar-art-thumb";
+        renderPlaylistArt(pl, artThumb, 24);
+        li.appendChild(artThumb);
         li.appendChild(label);
         if (!isLikedPlaylist(pl.id)) {
             const del = document.createElement("button");
@@ -6376,13 +6610,6 @@ export function renderPlaylistSidebar() {
                     async () => {
                         await deletePlaylist(pl.id);
                         renderPlaylistSidebar();
-                        homeBrowseCacheKey = getHomeBrowseCacheKey();
-                        if (
-                            views.home &&
-                            !views.home.classList.contains("hidden")
-                        ) {
-                            updateHomePlaylistsRow();
-                        }
                     },
                     "Delete",
                     true,
@@ -6392,6 +6619,8 @@ export function renderPlaylistSidebar() {
         }
         playlistListEl.appendChild(li);
     });
+    invalidateHomeBrowse();
+    updateHomePlaylistsRow();
 }
 
 async function openPlaylistView(playlistId) {
@@ -6411,6 +6640,81 @@ async function openPlaylistView(playlistId) {
     const headerArtEl = document.getElementById("playlist-view-art");
     if (headerArtEl) {
         renderPlaylistArt(pl, headerArtEl, 80);
+        
+        if (isLikedPlaylist(playlistId)) {
+            headerArtEl.classList.add("liked-songs-art");
+            headerArtEl.onclick = null;
+        } else {
+            headerArtEl.classList.remove("liked-songs-art");
+            headerArtEl.onclick = () => {
+                const fileInput = document.getElementById("playlist-art-file-input");
+                if (fileInput) {
+                    fileInput.value = "";
+                    fileInput.onchange = (event) => {
+                        const file = event.target.files[0];
+                        if (!file) return;
+                        
+                        const validMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
+                        const validExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"];
+                        const extension = file.name.includes(".") ? file.name.substring(file.name.lastIndexOf(".")).toLowerCase() : "";
+                        const isValidType = validMimeTypes.includes(file.type) || validExtensions.includes(extension);
+                        
+                        if (!isValidType) {
+                            showModal(
+                                "Unsupported Image Format",
+                                `<p style="margin-bottom: 0.8rem; font-size: 1.05rem;">The selected file <strong>${escapeHtml(file.name)}</strong> is not a supported image format.</p>
+                                 <p style="font-size: 0.95rem; opacity: 0.85;">Please upload a valid image. Supported formats include:</p>
+                                 <ul style="margin-left: 1.5rem; margin-top: 0.5rem; font-size: 0.95rem; opacity: 0.85; line-height: 1.5;">
+                                    <li><strong>JPEG / JPG</strong> (.jpg, .jpeg)</li>
+                                    <li><strong>PNG</strong> (.png)</li>
+                                    <li><strong>WEBP</strong> (.webp)</li>
+                                    <li><strong>GIF</strong> (.gif)</li>
+                                    <li><strong>SVG</strong> (.svg)</li>
+                                 </ul>`,
+                                null,
+                                "OK",
+                                false
+                            );
+                            return;
+                        }
+                        
+                        const reader = new FileReader();
+                        reader.onload = function(e) {
+                            const img = new Image();
+                            img.onload = function() {
+                                const canvas = document.createElement("canvas");
+                                const maxDim = 400;
+                                let width = img.width;
+                                let height = img.height;
+                                if (width > maxDim || height > maxDim) {
+                                    if (width > height) {
+                                        height = Math.round((height * maxDim) / width);
+                                        width = maxDim;
+                                    } else {
+                                        width = Math.round((width * maxDim) / height);
+                                        height = maxDim;
+                                    }
+                                }
+                                canvas.width = width;
+                                canvas.height = height;
+                                const ctx = canvas.getContext("2d");
+                                ctx.drawImage(img, 0, 0, width, height);
+                                
+                                const base64Data = canvas.toDataURL("image/jpeg", 0.85);
+                                pl.custom_image = base64Data;
+                                persistPlaylists().then(() => {
+                                    openPlaylistView(playlistId);
+                                    renderPlaylistSidebar();
+                                });
+                            };
+                            img.src = e.target.result;
+                        };
+                        reader.readAsDataURL(file);
+                    };
+                    fileInput.click();
+                }
+            };
+        }
     }
 
     const playlistHeaderEl = document.querySelector(".playlist-view-header");
@@ -6524,27 +6828,38 @@ async function openPlaylistView(playlistId) {
 
         tr.addEventListener("dragstart", (e) => {
             e.dataTransfer.effectAllowed = "copyMove";
+            const img = new Image();
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            e.dataTransfer.setDragImage(img, 0, 0);
+
+            const isDraggedSelected = isSelectionKeySelected(selectionKey);
+            const selectedSongs = getUniqueSelectedSongs();
+            const payloadSongs = isDraggedSelected ? selectedSongs : [song];
+
             const payload = {
                 index: i,
                 song: song,
+                songs: payloadSongs,
             };
             e.dataTransfer.setData("text/plain", JSON.stringify(payload));
             tr.classList.add("dragging");
-        });
-        tr.addEventListener("mousedown", (e) => {
-            if (e.button !== 0) return;
-            if (e.target.closest("button") || e.target.closest("a")) return;
+            document.body.classList.add("dragging-active");
+
             activeCustomDrag = {
                 song: song,
+                songs: payloadSongs,
                 element: tr,
                 ghostEl: null,
-                dragStarted: false,
+                dragStarted: true,
                 startX: e.clientX,
                 startY: e.clientY,
             };
+
+            createCustomDragGhost(activeCustomDrag, e.clientX, e.clientY);
         });
         tr.addEventListener("dragend", () => {
             tr.classList.remove("dragging");
+            document.body.classList.remove("dragging-active");
             clearActiveDragGhost();
         });
         tr.addEventListener("dragover", (e) => {
@@ -7061,6 +7376,12 @@ document
         );
     });
 
+document
+    .getElementById("btn-cancel-all-downloads")
+    ?.addEventListener("click", () => {
+        cancelAllDownloads();
+    });
+
 let _allDownloadsCache = {};
 
 function downloadsTableMessage(tbody, className, message) {
@@ -7274,6 +7595,48 @@ setTimeout(() => {
     let selectedPlaylists = new Map();
     const btnImportSelected = document.getElementById("btn-import-selected");
 
+    async function compressRemoteImage(url) {
+        if (!url || url.includes("default.png") || url.includes("noimage")) return null;
+        try {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
+                img.onload = () => {
+                    const canvas = document.createElement("canvas");
+                    const maxDim = 400;
+                    let width = img.width;
+                    let height = img.height;
+                    if (width > maxDim || height > maxDim) {
+                        if (width > height) {
+                            height = Math.round((height * maxDim) / width);
+                            width = maxDim;
+                        } else {
+                            width = Math.round((width * maxDim) / height);
+                            height = maxDim;
+                        }
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext("2d");
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL("image/jpeg", 0.85));
+                };
+                img.onerror = () => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result);
+                    reader.onerror = () => resolve(null);
+                    reader.readAsDataURL(blob);
+                };
+                img.src = URL.createObjectURL(blob);
+            });
+        } catch (e) {
+            console.warn("Failed to fetch and compress remote image:", e);
+            return null;
+        }
+    }
+
     function updateImportSelectedBtn() {
         if (!btnImportSelected) return;
         if (selectedPlaylists.size > 0) {
@@ -7412,6 +7775,15 @@ setTimeout(() => {
                     // Create local playlist
                     const newPl = await createPlaylist(data.name || pl.name);
 
+                    const coverUrl = data.image || pl.image || null;
+                    if (coverUrl) {
+                        const base64 = await compressRemoteImage(coverUrl);
+                        if (base64) {
+                            newPl.custom_image = base64;
+                            await persistPlaylists();
+                        }
+                    }
+
                     // Add all tracks sequentially to avoid db locking issues
                     const mappedSongs = data.tracks.map(mapSpotifyTrack);
                     for (const song of mappedSongs) {
@@ -7438,6 +7810,7 @@ setTimeout(() => {
 /* Now Playing Immersive Screensaver System */
 let screensaverInterval = null;
 let screensaverCursorTimeout = null;
+let ssLyricsVisible = false;
 const SCREENSAVER_TIME_FORMAT_KEY = "spotdl_screensaver_time_format";
 
 function getScreensaverTimeFormat() {
@@ -7604,7 +7977,21 @@ async function updateScreensaverUI() {
         }
     }
 
-    renderLyricsPanel("fullscreen-lyrics");
+    const lyricsPanel = document.getElementById("fullscreen-lyrics");
+    if (lyricsPanel) {
+        const isPureLyrics = ssOverlay.classList.contains("pure-lyrics-mode");
+        if (ssLyricsVisible || isPureLyrics) {
+            lyricsPanel.classList.remove("hidden");
+            renderLyricsPanel("fullscreen-lyrics");
+        } else {
+            lyricsPanel.classList.add("hidden");
+        }
+    }
+
+    const ssLyricsToggle = document.getElementById("ss-btn-lyrics-toggle");
+    if (ssLyricsToggle) {
+        ssLyricsToggle.classList.toggle("active", ssLyricsVisible || ssOverlay.classList.contains("pure-lyrics-mode"));
+    }
 }
 
 function openPureFullscreenLyrics() {
@@ -7632,6 +8019,7 @@ function toggleFullscreenScreensaver() {
     ssOverlay.classList.remove("pure-lyrics-mode");
     if (ssOverlay.classList.contains("hidden")) {
         ssOverlay.classList.remove("hidden");
+        ssLyricsVisible = false; // Disabled by default inside screensaver mode
         startScreensaverClock();
         updateScreensaverUI();
         resetScreensaverCursorTimer();
@@ -7748,6 +8136,21 @@ function initScreensaverEvents() {
         });
     }
 
+    const ssLyricsToggle = document.getElementById("ss-btn-lyrics-toggle");
+    if (ssLyricsToggle) {
+        ssLyricsToggle.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const ssOverlay = document.getElementById("fullscreen-screensaver");
+            if (ssOverlay && ssOverlay.classList.contains("pure-lyrics-mode")) {
+                ssOverlay.classList.remove("pure-lyrics-mode");
+                ssLyricsVisible = false;
+            } else {
+                ssLyricsVisible = !ssLyricsVisible;
+            }
+            updateScreensaverUI();
+        });
+    }
+
     const ssVolBar = document.getElementById("ss-volume-bar");
     if (ssVolBar) {
         ssVolBar.addEventListener("input", (e) => {
@@ -7786,7 +8189,7 @@ if (document.readyState === "loading") {
 }
 
 // ============================================================================
-// --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.8) ---
+// --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.9) ---
 // ============================================================================
 window.spotiTauri = {
     getCurrentSong: () =>
@@ -8135,4 +8538,101 @@ if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initPluginStoreEvents);
 } else {
     initPluginStoreEvents();
+}
+
+function handleGlobalKeyDown(e) {
+    // Determine if the active element is a text input where we should allow typing
+    const active = document.activeElement;
+    if (active) {
+        const tagName = active.tagName.toLowerCase();
+        const type = active.type ? active.type.toLowerCase() : "";
+        if (
+            tagName === "textarea" ||
+            (tagName === "input" && (
+                type === "text" ||
+                type === "search" ||
+                type === "number" ||
+                type === "email" ||
+                type === "password" ||
+                type === "url" ||
+                type === "tel"
+            )) ||
+            active.isContentEditable
+        ) {
+            return;
+        }
+    }
+
+    // Handle playback controls
+    switch (e.key) {
+        case " ": // Spacebar
+            e.preventDefault();
+            if (btnPlay) {
+                btnPlay.click();
+            }
+            break;
+
+        case "ArrowUp":
+            e.preventDefault();
+            if (volumeBar) {
+                let val = Math.min(100, Number(volumeBar.value) + 5);
+                volumeBar.value = val;
+                volumeBar.dispatchEvent(new Event("input"));
+            }
+            break;
+
+        case "ArrowDown":
+            e.preventDefault();
+            if (volumeBar) {
+                let val = Math.max(0, Number(volumeBar.value) - 5);
+                volumeBar.value = val;
+                volumeBar.dispatchEvent(new Event("input"));
+            }
+            break;
+
+        case "ArrowLeft":
+            e.preventDefault();
+            if (audioPlayer && Number.isFinite(audioPlayer.duration)) {
+                audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 10);
+                syncProgressFromPlayer();
+                syncLyricsPlayback(audioPlayer.currentTime);
+            }
+            break;
+
+        case "ArrowRight":
+            e.preventDefault();
+            if (audioPlayer && Number.isFinite(audioPlayer.duration)) {
+                audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 10);
+                syncProgressFromPlayer();
+                syncLyricsPlayback(audioPlayer.currentTime);
+            }
+            break;
+
+        case "n":
+        case "N":
+            e.preventDefault();
+            playNextTrack();
+            break;
+
+        case "p":
+        case "P":
+            e.preventDefault();
+            playPreviousTrack();
+            break;
+
+        case "m":
+        case "M":
+            e.preventDefault();
+            if (volumeBar) {
+                const currentVal = Number(volumeBar.value);
+                if (currentVal > 0) {
+                    volumeBar.dataset.prevVolume = currentVal.toString();
+                    volumeBar.value = "0";
+                } else {
+                    volumeBar.value = volumeBar.dataset.prevVolume || "50";
+                }
+                volumeBar.dispatchEvent(new Event("input"));
+            }
+            break;
+    }
 }

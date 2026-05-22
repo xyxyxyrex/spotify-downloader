@@ -42,7 +42,7 @@ function setLyricsPayload(payload) {
     lyricsState.payload = payload || null;
     if (!payload?.synced?.length) {
         lyricsState.mode = "plain";
-    } else if (!lyricsState.mode) {
+    } else {
         lyricsState.mode = "synced";
     }
     renderLyricsPanels();

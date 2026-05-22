@@ -4,7 +4,7 @@ import {
     applyTheme, showModal, 
     apiStatus, refreshThemeOptions
 } from "../main.js";
-import { loadPlaylistsFromDisk } from "../playlists.js";
+import { loadPlaylistsFromDisk, getPlaylists } from "../playlists.js";
 import { renderProfilePage } from "./profile.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -499,12 +499,17 @@ export function setupSettings() {
                             const clonedNew = cloneTracks(newTracksToAppend, startOrder);
                             existingPl.tracks = [...existingPl.tracks, ...clonedNew];
                         }
+                        
+                        if (importedPl.custom_image && !existingPl.custom_image) {
+                            existingPl.custom_image = importedPl.custom_image;
+                        }
                     } else {
                         // Add a brand new playlist (with cloned/unique IDs to prevent any index clashes)
                         const newPl = {
                             id: importedPl.id === "pl_liked_songs" ? "pl_liked_songs" : generateUniqueId("pl"),
                             name: importedPl.name.trim(),
-                            tracks: cloneTracks(importedPl.tracks, 0)
+                            tracks: cloneTracks(importedPl.tracks, 0),
+                            custom_image: importedPl.custom_image || null
                         };
                         current.push(newPl);
                     }

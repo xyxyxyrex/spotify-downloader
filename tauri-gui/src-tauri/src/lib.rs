@@ -95,6 +95,7 @@ pub struct UserPlaylist {
     pub id: String,
     pub name: String,
     pub tracks: Vec<PlaylistTrack>,
+    pub custom_image: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
