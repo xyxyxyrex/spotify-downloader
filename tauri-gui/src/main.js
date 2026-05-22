@@ -47,7 +47,22 @@ import {
     renderProfilePage,
 } from "./components/profile.js";
 
-import { loadSettingsUI, setupSettings } from "./components/settings.js";
+import {
+    loadSettingsUI,
+    setupSettings,
+    updateCacheUsage,
+} from "./components/settings.js";
+import {
+    fetchiTunesCoverArt,
+    resolveTrackCoverUrl,
+    injectCoverIntoMeta,
+    isUsableCoverUrl,
+} from "./utils/cover-art.js";
+import {
+    renderLyricsPanel,
+    setLyricsPayload,
+    syncLyricsPlayback,
+} from "./components/lyrics-sync.js";
 const { invoke, convertFileSrc } = window.__TAURI__.core;
 
 // Memory Cache
@@ -170,6 +185,7 @@ async function cachedInvoke(command, args = {}) {
         "spotify_search",
         "fetch_track_metadata",
         "fetch_lyrics",
+        "fetch_lyrics_payload",
     ].includes(command);
     const key = `${command}:${JSON.stringify(args)}`;
     if (cacheable && memCache.has(key)) return memCache.get(key);
@@ -204,6 +220,26 @@ const LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f";
 const audioPlayer = new Audio();
 // Allow Web Audio API processing for visualizer
 audioPlayer.crossOrigin = "anonymous";
+window.audioPlayer = audioPlayer;
+window.seekAudio = (seconds) => {
+    if (audioPlayer && Number.isFinite(seconds)) {
+        const targetSec = Number(seconds);
+        if (typeof isLivePlaybackActive === "function" && isLivePlaybackActive()) {
+            const dur = typeof playbackDurationSeconds === "function" ? playbackDurationSeconds() : 0;
+            if (dur > 0 && typeof seekLiveStreamAtRatio === "function") {
+                const ratio = targetSec / dur;
+                void seekLiveStreamAtRatio(ratio);
+                return;
+            }
+        }
+        if (Number.isFinite(audioPlayer.duration) && audioPlayer.duration > 0) {
+            audioPlayer.currentTime = Math.max(0, Math.min(targetSec, audioPlayer.duration));
+        } else {
+            audioPlayer.currentTime = targetSec;
+        }
+        syncLyricsPlayback(audioPlayer.currentTime);
+    }
+};
 let audioContext = null;
 let analyser = null;
 let dataArray = null;
@@ -3135,6 +3171,7 @@ function setupPlayer() {
         progressBar.value =
             (audioPlayer.currentTime / audioPlayer.duration) * 100;
         timeCurrent.textContent = formatTime(audioPlayer.currentTime);
+        syncLyricsPlayback(audioPlayer.currentTime);
 
         const sec = Math.floor(audioPlayer.currentTime);
         if (sec !== lastSavedSec && sec >= 0) {
@@ -3148,6 +3185,7 @@ function setupPlayer() {
 
     audioPlayer.addEventListener("loadedmetadata", () => {
         timeTotal.textContent = formatTime(audioPlayer.duration);
+        syncLyricsPlayback(audioPlayer.currentTime);
         if (pendingSeekRatio != null) {
             if (isLivePlaybackActive()) {
                 const ratio = pendingSeekRatio;
@@ -3175,6 +3213,7 @@ function setupPlayer() {
             return;
         }
         syncProgressFromPlayer();
+        syncLyricsPlayback(audioPlayer.currentTime);
     });
 
     audioPlayer.addEventListener("ended", onTrackEnded);
@@ -3782,8 +3821,8 @@ function notifyRecentlyPlayedChanged() {
 
 function songNeedsMetadataFetch(song) {
     if (!song?.title || !song?.artist) return false;
-    if (song.meta && isValidImage(song.image)) return false;
-    if (isValidImage(song.image) && song.album) return false;
+    if (song.meta && isUsableCoverUrl(song.image)) return false;
+    if (isUsableCoverUrl(song.image) && song.album) return false;
     return true;
 }
 
@@ -3823,6 +3862,7 @@ async function updateDetailSidebarForSong(song) {
         loadDetailLyrics(song.artist, song.title);
     }
 
+    await resolveTrackCoverUrl(song);
     await setDetailArt(
         isValidImage(song.image) ? song.image : null,
         song.title,
@@ -3902,35 +3942,27 @@ function showHomeBrowse() {
 }
 
 async function enrichCollageItems(items) {
-    const needs = items.filter((t) => t && !isValidImage(t.image)).slice(0, 8);
+    const needs = items
+        .filter((t) => t && !isUsableCoverUrl(t.image))
+        .slice(0, 8);
     await mapPool(needs, 8, async (item) => {
         try {
-            let url = item.image;
-            if (!isValidImage(url)) {
-                if (item.isAlbum) {
-                    const meta = await cachedInvoke("fetch_album_metadata", {
-                        artist: item.artist,
-                        album: item.title,
-                    });
-                    url = pickBestImageUrl(meta.album_images || []);
-                } else {
-                    const meta = await cachedInvoke("fetch_track_metadata", {
-                        artist: item.artist,
-                        track: item.title,
-                    });
-                    url = pickBestImageUrl(
-                        mergeImages(
-                            meta.album_images || [],
-                            meta.track_images || [],
-                        ),
-                    );
+            if (item.isAlbum) {
+                const meta = await cachedInvoke("fetch_album_metadata", {
+                    artist: item.artist,
+                    album: item.title,
+                });
+                item.meta = meta;
+                let url = pickBestImageUrl(meta.album_images || []);
+                if (!isUsableCoverUrl(url)) {
+                    url = await fetchiTunesCoverArt(item.artist, item.title);
                 }
+                if (url) item.image = url;
+            } else {
+                await resolveTrackCoverUrl(item);
             }
-            if (url) {
-                item.image = url;
-            }
-        } catch (e) {
-            // ignore
+        } catch {
+            /* skip */
         }
     });
 }
@@ -4236,25 +4268,19 @@ async function prefetchArtForSongs(songs) {
 }
 
 async function enrichSongsArt(songs, container) {
-    const needs = songs.filter((s) => !isValidImage(s.image));
+    const needs = songs.filter((s) => !isUsableCoverUrl(s.image));
     await mapPool(needs, 5, async (song) => {
         try {
-            let url = song.image;
-            if (!isValidImage(url)) {
+            if (!song.meta) {
                 const meta = await cachedInvoke("fetch_track_metadata", {
                     artist: song.artist,
                     track: song.title,
                 });
-                url = pickBestImageUrl(
-                    mergeImages(
-                        meta.album_images || [],
-                        meta.track_images || [],
-                    ),
-                );
+                song.meta = meta;
                 song.album = meta.album || song.album;
             }
+            const url = await resolveTrackCoverUrl(song);
             if (url) {
-                song.image = url;
                 await resolveArtUrl(url);
                 await updateTileArt(container, song);
             }
@@ -5415,17 +5441,17 @@ function drawDetailCanvas(title, artist) {
 async function loadDetailLyrics(artist, title) {
     if (!detailLyricsEl || !artist || !title) return;
     const id = ++lyricsRequestId;
-    detailLyricsEl.textContent = "Loading lyrics…";
     try {
-        const text = await invoke("fetch_lyrics", { artist, title });
+        const payload = await invoke("fetch_lyrics_payload", {
+            artist,
+            title,
+        });
         if (id !== lyricsRequestId) return;
-        detailLyricsEl.textContent =
-            text && String(text).trim()
-                ? String(text).trim()
-                : "No lyrics found for this track.";
+        setLyricsPayload(payload);
+        renderLyricsPanel("detail-lyrics");
     } catch (err) {
         if (id !== lyricsRequestId) return;
-        detailLyricsEl.textContent = `Lyrics unavailable: ${String(err)}`;
+        detailLyricsEl.innerHTML = `<div class="lyrics-empty">Lyrics unavailable: ${String(err)}</div>`;
     }
 }
 
@@ -5720,29 +5746,6 @@ async function restoreLastPlayedSession() {
     }
 }
 
-async function fetchiTunesCoverArt(artist, title) {
-    try {
-        const query = `${artist} ${title}`;
-        const url = `https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=1`;
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        const data = await res.json();
-        if (data.results && data.results.length > 0) {
-            const track = data.results[0];
-            let artUrl = track.artworkUrl100;
-            if (artUrl) {
-                artUrl = artUrl
-                    .replace("100x100bb.jpg", "600x600bb.jpg")
-                    .replace("100x100.jpg", "600x600.jpg");
-                return artUrl;
-            }
-        }
-    } catch (e) {
-        console.warn("iTunes artwork fallback failed:", e);
-    }
-    return null;
-}
-
 function updateRecentlyPlayedImage(song, newImageUrl) {
     if (!song?.title || !song?.artist || !newImageUrl) return;
     try {
@@ -5791,26 +5794,7 @@ async function fetchAndShowMetadata(song) {
             meta.album_images || [],
             meta.track_images || [],
         );
-        let bestUrl = pickBestImageUrl(allImages) || song.image;
-
-        // If no valid Last.fm image or standard placeholder, fetch iTunes fallback!
-        if (
-            !bestUrl ||
-            bestUrl.includes("default") ||
-            bestUrl.includes("placeholder") ||
-            bestUrl.includes("2a96cbd8b46e442fc41c2b86b821562f")
-        ) {
-            console.log(
-                `No valid Last.fm image for "${song.title}". Querying iTunes fallback...`,
-            );
-            const itunesArt = await fetchiTunesCoverArt(
-                song.artist,
-                song.title,
-            );
-            if (itunesArt) {
-                bestUrl = itunesArt;
-            }
-        }
+        const bestUrl = await resolveTrackCoverUrl(song, { meta });
 
         if (bestUrl) {
             song.image = bestUrl;
@@ -5899,6 +5883,8 @@ async function downloadSongWithMetadata(song) {
     statusBar.textContent = `Downloading ${song.title}...`;
     setSongDownloadActivity(song, "Fetching metadata");
     try {
+        await ensureStorageReadyForDownload();
+
         let meta = song.meta;
         if (!meta) {
             meta = await cachedInvoke("fetch_track_metadata", {
@@ -5907,6 +5893,9 @@ async function downloadSongWithMetadata(song) {
             });
             song.meta = meta;
         }
+
+        await resolveTrackCoverUrl(song, { meta });
+        injectCoverIntoMeta(meta, song.image);
 
         setSongDownloadActivity(song, "Downloading audio");
         const query = `${song.title} ${song.artist}`;
@@ -5928,10 +5917,19 @@ async function downloadSongWithMetadata(song) {
         statusBar.textContent = `Saved: ${savedPath}`;
         return savedPath;
     } catch (e) {
-        statusBar.textContent = `Error: ${e}`;
+        const errText = formatDownloadErrorMessage(e);
+        statusBar.textContent = `Error: ${errText}`;
+        const isStorageErr =
+            errText.includes("storage") ||
+            errText.includes("writable") ||
+            errText.includes("Cannot create") ||
+            errText.includes("not a folder");
         showModal(
-            "Download Failed",
-            `<p style="margin-bottom: 0.8rem; font-size: 1.05rem;">Could not download <strong>${escapeHtml(song.title)}</strong> by <strong>${escapeHtml(song.artist)}</strong>.</p>
+            isStorageErr ? "Storage folder problem" : "Download Failed",
+            isStorageErr
+                ? `<p style="margin-bottom: 0.8rem;">${escapeHtml(errText)}</p>
+                   <p style="color: var(--fg-muted); font-size: 0.92rem;">Use <strong>Downloads</strong> or <strong>Settings</strong> to pick a valid folder with Browse (📁).</p>`
+                : `<p style="margin-bottom: 0.8rem; font-size: 1.05rem;">Could not download <strong>${escapeHtml(song.title)}</strong> by <strong>${escapeHtml(song.artist)}</strong>.</p>
              <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45; margin-bottom: 0.5rem;">
                 This error typically occurs when the song/audio source <strong>cannot be found on YouTube</strong>, or when the video is blocked/restricted.
              </p>
@@ -5940,7 +5938,7 @@ async function downloadSongWithMetadata(song) {
              </p>`,
             () => {},
             "Close",
-            false, // Hide the cancel button since it's just an alert
+            false,
         );
         throw e;
     } finally {
@@ -6107,6 +6105,7 @@ async function setNowPlaying(song) {
     const npArtistEl = document.getElementById("np-artist");
     npArtistEl.replaceChildren(artistLinkEl(song.artist));
     npArt.innerHTML = "";
+    await resolveTrackCoverUrl(song);
     if (isValidImage(song.image)) {
         const cached = await resolveArtUrl(song.image);
         if (cached) {
@@ -6830,11 +6829,118 @@ export function showModal(
 }
 
 // Download Management View
+function formatDownloadErrorMessage(err) {
+    const msg = String(err);
+    if (
+        msg.includes("Download storage") ||
+        msg.includes("Cache storage") ||
+        msg.includes("not writable") ||
+        msg.includes("Cannot create")
+    ) {
+        return `${msg} Open Settings or Downloads and choose a valid folder.`;
+    }
+    return msg;
+}
+
+async function refreshDownloadsStoragePaths() {
+    const dlPathEl = document.getElementById("downloads-path-text");
+    const cachePathEl = document.getElementById("cache-path-text");
+    try {
+        const status = await invoke("get_storage_paths_status");
+        if (dlPathEl) {
+            dlPathEl.textContent = status.download_dir || "";
+            dlPathEl.classList.toggle(
+                "is-error",
+                Boolean(status.download_error),
+            );
+            if (status.download_error) {
+                dlPathEl.textContent = `${status.download_dir}\n${status.download_error}`;
+            }
+        }
+        if (cachePathEl) {
+            cachePathEl.textContent = status.cache_dir || "";
+            cachePathEl.classList.toggle(
+                "is-error",
+                Boolean(status.cache_error),
+            );
+            if (status.cache_error) {
+                cachePathEl.textContent = `${status.cache_dir}\n${status.cache_error}`;
+            }
+        }
+        const cacheInput = document.getElementById("cache-dir-input");
+        const downloadInput = document.getElementById("download-dir-input");
+        if (cacheInput && !cacheInput.value.trim()) {
+            cacheInput.placeholder = status.cache_dir || "";
+        }
+        if (downloadInput && !downloadInput.value.trim()) {
+            downloadInput.placeholder = status.download_dir || "";
+        }
+    } catch (err) {
+        console.warn("refreshDownloadsStoragePaths:", err);
+    }
+}
+
+async function pickAndApplyStorageDir(kind) {
+    const isCache = kind === "cache";
+    const title = isCache ? "Select cache folder" : "Select downloads folder";
+    try {
+        const picked = await invoke("pick_folder", { title });
+        if (!picked) return;
+        await invoke("set_settings", {
+            input: isCache
+                ? { cacheDir: picked, downloadDir: null }
+                : { cacheDir: null, downloadDir: picked },
+        });
+        await loadSettingsUI();
+        await refreshDownloadsStoragePaths();
+        await updateCacheUsage();
+        await updateDownloadsUsage();
+        await renderDownloadsList(downloadsSearchQuery);
+        statusBar.textContent = isCache
+            ? "Cache folder updated."
+            : "Downloads folder updated.";
+    } catch (err) {
+        statusBar.textContent = `Folder selection failed: ${err}`;
+        showModal(
+            "Invalid folder",
+            `<p>${escapeHtml(String(err))}</p>`,
+            () => {},
+            "Close",
+            false,
+        );
+    }
+}
+
+async function ensureStorageReadyForDownload() {
+    const status = await invoke("get_storage_paths_status");
+    if (status.download_error) {
+        throw new Error(status.download_error);
+    }
+    if (status.cache_error) {
+        throw new Error(status.cache_error);
+    }
+}
+
 async function initDownloadsView() {
-    await refreshDownloadedKeys();
-    await updateCacheUsage();
-    await updateDownloadsUsage();
-    await renderDownloadsList();
+    try {
+        await invoke("rebuild_download_library").catch((e) =>
+            console.warn("rebuild_download_library:", e),
+        );
+        await refreshDownloadedKeys();
+        await refreshDownloadsStoragePaths();
+        await Promise.all([updateCacheUsage(), updateDownloadsUsage()]);
+        await renderDownloadsList(downloadsSearchQuery);
+    } catch (err) {
+        console.error("initDownloadsView failed:", err);
+        const tbody = document.getElementById("downloads-tracks-body");
+        if (tbody) {
+            downloadsTableMessage(
+                tbody,
+                "downloads-error",
+                `Downloads view failed to load: ${err}`,
+            );
+        }
+    }
 }
 
 function formatBytes(bytes, decimals = 2) {
@@ -6847,21 +6953,27 @@ function formatBytes(bytes, decimals = 2) {
 }
 
 async function updateDownloadsUsage() {
+    const el = document.getElementById("downloads-usage-text");
+    if (!el) return;
     try {
         const info = await invoke("get_downloads_info");
-        const totalSizeStr = formatBytes(info.total_size_bytes);
-        const el = document.getElementById("downloads-usage-text");
-        if (el) {
-            el.textContent = `Total Size: ${totalSizeStr}`;
-        }
+        const count = info.items?.length ?? 0;
+        el.textContent = `${count} track${count === 1 ? "" : "s"} · ${formatBytes(info.total_size_bytes)}`;
+        el.classList.remove("is-error");
     } catch (err) {
         console.error("Failed to update downloads usage:", err);
-        const el = document.getElementById("downloads-usage-text");
-        if (el) {
-            el.textContent = `Total Size: Error (${err})`;
-        }
+        el.textContent = "Downloads size unavailable";
+        el.classList.add("is-error");
     }
 }
+
+document
+    .getElementById("btn-browse-downloads-dir")
+    ?.addEventListener("click", () => pickAndApplyStorageDir("download"));
+
+document
+    .getElementById("btn-browse-cache-dir")
+    ?.addEventListener("click", () => pickAndApplyStorageDir("cache"));
 
 document
     .getElementById("btn-open-downloads-dir")
@@ -6870,6 +6982,16 @@ document
             await invoke("open_downloads_directory");
         } catch (err) {
             statusBar.textContent = `Failed to open directory: ${err}`;
+        }
+    });
+
+document
+    .getElementById("btn-open-cache-dir")
+    ?.addEventListener("click", async () => {
+        try {
+            await invoke("open_cache_directory");
+        } catch (err) {
+            statusBar.textContent = `Failed to open cache folder: ${err}`;
         }
     });
 
@@ -6958,11 +7080,10 @@ async function renderDownloadsList(searchQuery = "") {
         }
         _allDownloadsCache = index;
 
-        // Also update total downloads usage text on render
-        const totalSizeStr = formatBytes(info.total_size_bytes);
         const el = document.getElementById("downloads-usage-text");
         if (el) {
-            el.textContent = `Total Size: ${totalSizeStr}`;
+            const count = info.items?.length ?? 0;
+            el.textContent = `${count} track${count === 1 ? "" : "s"} · ${formatBytes(info.total_size_bytes)}`;
         }
 
         let keys = Object.keys(index).sort((a, b) => {
@@ -7369,7 +7490,7 @@ function updateScreensaverClock() {
     clockEl.title = `Click to switch to ${timeFormat === "24h" ? "AM/PM" : "24H"}`;
 
     if (dateEl) {
-        dateEl.textContent = new Intl.DateTimeFormat(undefined, {
+        dateEl.textContent = new Intl.DateTimeFormat("en-US", {
             month: "long",
             day: "numeric",
             year: "numeric",
@@ -7442,6 +7563,8 @@ async function updateScreensaverUI() {
         artistEl.style.fontSize = "1.8rem";
     }
 
+    await resolveTrackCoverUrl(currentSong);
+
     let artUrl = "";
     if (isValidImage(currentSong.image)) {
         const cached = await resolveArtUrl(currentSong.image);
@@ -7467,12 +7590,33 @@ async function updateScreensaverUI() {
             wrap.appendChild(fallback);
         }
     }
+
+    renderLyricsPanel("fullscreen-lyrics");
+}
+
+function openPureFullscreenLyrics() {
+    const ssOverlay = document.getElementById("fullscreen-screensaver");
+    if (!ssOverlay) return;
+
+    ssOverlay.classList.add("pure-lyrics-mode");
+    if (ssOverlay.classList.contains("hidden")) {
+        ssOverlay.classList.remove("hidden");
+        updateScreensaverUI();
+        resetScreensaverCursorTimer();
+
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch((e) => {
+                console.warn("Fullscreen request rejected:", e);
+            });
+        }
+    }
 }
 
 function toggleFullscreenScreensaver() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay) return;
 
+    ssOverlay.classList.remove("pure-lyrics-mode");
     if (ssOverlay.classList.contains("hidden")) {
         ssOverlay.classList.remove("hidden");
         startScreensaverClock();
@@ -7494,6 +7638,7 @@ function closeFullscreenScreensaver() {
     if (!ssOverlay) return;
 
     ssOverlay.classList.add("hidden");
+    ssOverlay.classList.remove("pure-lyrics-mode");
     stopScreensaverClock();
     clearTimeout(screensaverCursorTimeout);
     ssOverlay.classList.remove("cursor-hidden");
@@ -7511,6 +7656,8 @@ function closeFullscreenScreensaver() {
 }
 
 function initScreensaverEvents() {
+    window.openPureFullscreenLyrics = openPureFullscreenLyrics;
+    window.closeFullscreenScreensaver = closeFullscreenScreensaver;
     const btnSS = document.getElementById("btn-fullscreen-saver");
     if (btnSS) {
         btnSS.addEventListener("click", toggleFullscreenScreensaver);
@@ -7525,6 +7672,17 @@ function initScreensaverEvents() {
     const ssClock = document.getElementById("screensaver-clock");
     if (ssClock) {
         ssClock.addEventListener("click", toggleScreensaverTimeFormat);
+        ssClock.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                toggleScreensaverTimeFormat(e);
+            }
+        });
+    }
+
+    const ssRight = document.querySelector(".screensaver-right");
+    if (ssRight) {
+        ssRight.addEventListener("click", (e) => e.stopPropagation());
     }
 
     const ssControls = document.querySelector(".screensaver-controls");
@@ -7615,9 +7773,21 @@ if (document.readyState === "loading") {
 }
 
 // ============================================================================
-// --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.7) ---
+// --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.8) ---
 // ============================================================================
 window.spotiTauri = {
+    getCurrentSong: () =>
+        currentSong ? JSON.parse(JSON.stringify(currentSong)) : null,
+    getCurrentPlaybackSource: () =>
+        currentStreamData
+            ? JSON.parse(JSON.stringify(currentStreamData))
+            : null,
+    getPlaybackState: () => ({
+        currentTime: audioPlayer ? Number(audioPlayer.currentTime || 0) : 0,
+        duration: audioPlayer ? Number(audioPlayer.duration || 0) : 0,
+        paused: audioPlayer ? Boolean(audioPlayer.paused) : true,
+        seeking: audioPlayer ? Boolean(audioPlayer.seeking) : false,
+    }),
     getHistory: async () => {
         return invoke("get_history").catch(() => ({}));
     },

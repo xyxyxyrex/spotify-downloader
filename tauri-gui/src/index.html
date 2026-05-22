@@ -10,12 +10,13 @@
         <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
         <script type="module" src="/main.js" defer></script>
         <script type="module" src="/plugins/spotify-wrapped.js" defer></script>
+        <script type="module" src="/plugins/karaoke-mode.js" defer></script>
     </head>
     <body>
         <header id="custom-titlebar">
             <div class="titlebar-left" data-tauri-drag-region>
                 <span class="titlebar-brand">spoti-tauri</span>
-                <span class="titlebar-title">SpotDL GUI v0.2.7</span>
+                <span class="titlebar-title">SpotDL GUI v0.2.8</span>
             </div>
             <div class="titlebar-actions" data-tauri-drag-region="false">
                 <button
@@ -1243,6 +1244,10 @@
                                     >
                                         Calculating downloads size...
                                     </p>
+                                    <p
+                                        id="downloads-path-text"
+                                        class="downloads-path-text"
+                                    ></p>
                                     <p class="settings-hint">
                                         All offline tracks are saved here. You
                                         can open the directory or manage them
@@ -1250,18 +1255,22 @@
                                     </p>
                                     <div
                                         class="settings-actions downloads-actions"
-                                        style="display: flex; gap: 10px"
                                     >
                                         <button
                                             type="button"
-                                            id="btn-open-downloads-dir"
-                                            class="btn-primary"
-                                            style="
-                                                padding: 8px 16px;
-                                                font-size: 0.85rem;
-                                            "
+                                            id="btn-browse-downloads-dir"
+                                            class="btn-browse btn-icon-action"
+                                            title="Choose downloads folder"
+                                            aria-label="Choose downloads folder"
                                         >
-                                            Open Downloads Directory
+                                            📁 Browse
+                                        </button>
+                                        <button
+                                            type="button"
+                                            id="btn-open-downloads-dir"
+                                            class="btn-secondary"
+                                        >
+                                            Open folder
                                         </button>
                                     </div>
                                 </section>
@@ -1271,7 +1280,7 @@
                                     style="margin: 0"
                                 >
                                     <h3 class="downloads-section-title">
-                                        Cache Management
+                                        Cache Storage
                                     </h3>
                                     <p
                                         id="cache-usage-text"
@@ -1279,6 +1288,10 @@
                                     >
                                         Calculating cache size...
                                     </p>
+                                    <p
+                                        id="cache-path-text"
+                                        class="downloads-path-text"
+                                    ></p>
                                     <p class="settings-hint">
                                         Stream cache speeds up replay. Clearing
                                         it does not remove saved downloads.
@@ -1288,12 +1301,24 @@
                                     >
                                         <button
                                             type="button"
+                                            id="btn-browse-cache-dir"
+                                            class="btn-browse btn-icon-action"
+                                            title="Choose cache folder"
+                                            aria-label="Choose cache folder"
+                                        >
+                                            📁 Browse
+                                        </button>
+                                        <button
+                                            type="button"
+                                            id="btn-open-cache-dir"
+                                            class="btn-secondary"
+                                        >
+                                            Open folder
+                                        </button>
+                                        <button
+                                            type="button"
                                             id="btn-clear-cache"
                                             class="btn-secondary btn-danger-outline"
-                                            style="
-                                                padding: 8px 16px;
-                                                font-size: 0.85rem;
-                                            "
                                         >
                                             Clear cache
                                         </button>
@@ -1596,11 +1621,11 @@
                                 class="detail-lyrics-section"
                             >
                                 <h4>Lyrics</h4>
-                                <pre
+                                <div
                                     id="detail-lyrics"
                                     class="detail-lyrics"
                                     aria-live="polite"
-                                ></pre>
+                                ></div>
                             </section>
                         </div>
                     </div>
@@ -1888,6 +1913,113 @@
                 </div>
             </div>
         </div>
+        <!-- Now Playing Fullscreen Dedicated Lyrics Mode -->
+        <div id="fullscreen-lyrics-overlay" class="lyrics-overlay hidden">
+            <div id="fullscreen-lyrics-bg" class="lyrics-overlay-bg"></div>
+            <div class="lyrics-overlay-content">
+                <!-- Left Side: Album Art, Info, and Full Controls -->
+                <div class="lyrics-overlay-left">
+                    <div id="fullscreen-lyrics-art-wrap" class="lyrics-overlay-art-wrap">
+                        <img id="fullscreen-lyrics-art" src="" alt="Album Art" />
+                    </div>
+                    <div class="lyrics-overlay-song-info">
+                        <h1 id="fullscreen-lyrics-title" class="lyrics-overlay-title">
+                            Song Title
+                        </h1>
+                        <h2 id="fullscreen-lyrics-artist" class="lyrics-overlay-artist">
+                            Artist Name
+                        </h2>
+                    </div>
+                    
+                    <!-- Premium Progress Bar -->
+                    <div class="lyrics-progress-container">
+                        <span id="lyrics-time-current" class="lyrics-time-label">0:00</span>
+                        <div id="lyrics-progress-slider-wrap" class="lyrics-progress-slider-wrap">
+                            <input
+                                type="range"
+                                id="lyrics-progress-bar"
+                                class="lyrics-progress-bar"
+                                min="0"
+                                max="100"
+                                value="0"
+                            />
+                            <div class="lyrics-progress-bar-fill" id="lyrics-progress-fill"></div>
+                        </div>
+                        <span id="lyrics-time-total" class="lyrics-time-label">0:00</span>
+                    </div>
+
+                    <!-- Premium Playback Controls -->
+                    <div class="lyrics-overlay-controls">
+                        <button
+                            id="lyrics-btn-shuffle"
+                            class="lyrics-control-btn lyrics-toggle-btn"
+                            title="Shuffle"
+                        >
+                            ⤮
+                        </button>
+                        <button
+                            id="lyrics-btn-prev"
+                            class="lyrics-control-btn"
+                            title="Previous"
+                        >
+                            ⏮
+                        </button>
+                        <button
+                            id="lyrics-btn-play"
+                            class="lyrics-control-btn lyrics-play-btn"
+                            title="Play/Pause"
+                        >
+                            ▶
+                        </button>
+                        <button
+                            id="lyrics-btn-next"
+                            class="lyrics-control-btn"
+                            title="Next"
+                        >
+                            ⏭
+                        </button>
+                        <button
+                            id="lyrics-btn-loop"
+                            class="lyrics-control-btn lyrics-toggle-btn"
+                            title="Repeat"
+                        >
+                            ↻
+                        </button>
+                        <div class="lyrics-volume-control">
+                            <span class="lyrics-vol-label">VOL</span>
+                            <input
+                                type="range"
+                                id="lyrics-volume-bar"
+                                class="lyrics-volume-slider"
+                                min="0"
+                                max="100"
+                                value="80"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Side: Synced / Scrollable Lyrics -->
+                <div class="lyrics-overlay-right">
+                    <div
+                        id="fullscreen-lyrics-panel"
+                        class="fullscreen-lyrics-panel-dedicated"
+                    ></div>
+                </div>
+            </div>
+            
+            <!-- Elegant Exit Button & Close Hint -->
+            <button id="lyrics-overlay-close-btn" class="lyrics-overlay-close-btn" title="Exit Fullscreen">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18"></line>
+                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                </svg>
+            </button>
+            <div class="lyrics-overlay-close-hint">
+                Press ESC or click empty space to exit
+            </div>
+        </div>
+
         <!-- Now Playing Fullscreen Screensaver -->
         <div id="fullscreen-screensaver" class="screensaver-overlay hidden">
             <div id="screensaver-bg" class="screensaver-bg"></div>
@@ -1909,13 +2041,24 @@
                     <div
                         id="screensaver-clock"
                         class="screensaver-clock"
-                        title="Click to switch to AM/PM"
+                        role="button"
+                        tabindex="0"
+                        title="Click to switch between 24-hour and AM/PM"
+                        aria-label="Current time. Click to toggle 24-hour or AM/PM format."
                     >
                         12:00:00
                     </div>
-                    <div id="screensaver-date" class="screensaver-date">
+                    <div
+                        id="screensaver-date"
+                        class="screensaver-date"
+                        aria-live="polite"
+                    >
                         May 21, 2026
                     </div>
+                    <div
+                        id="fullscreen-lyrics"
+                        class="fullscreen-lyrics-panel"
+                    ></div>
                 </div>
             </div>
 
@@ -2109,6 +2252,166 @@
                             Share
                         </button>
                     </div>
+                </div>
+
+                <!-- Karaoke Mode Plugin Card (built-in) -->
+                <div
+                    class="plugin-card"
+                    data-plugin-id="karaoke-mode"
+                    style="
+                        background: rgba(255, 255, 255, 0.03);
+                        border: 1px solid rgba(255, 255, 255, 0.08);
+                        border-radius: 12px;
+                        padding: 20px;
+                        display: flex;
+                        flex-direction: column;
+                        gap: 15px;
+                        transition: all 0.3s ease;
+                        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+                        position: relative;
+                        overflow: hidden;
+                    "
+                >
+                    <div
+                        style="
+                            position: absolute;
+                            top: 0;
+                            left: 0;
+                            width: 100%;
+                            height: 4px;
+                            background: linear-gradient(
+                                90deg,
+                                #00bcd4,
+                                #1db954
+                            );
+                        "
+                    ></div>
+                    <div
+                        style="
+                            display: flex;
+                            align-items: center;
+                            justify-content: space-between;
+                        "
+                    >
+                        <span style="font-size: 1.8rem">🎤</span>
+                        <span
+                            style="
+                                background: rgba(0, 188, 212, 0.15);
+                                color: #00bcd4;
+                                font-size: 0.75rem;
+                                font-weight: 700;
+                                padding: 4px 10px;
+                                border-radius: 20px;
+                                text-transform: uppercase;
+                            "
+                            >Built-in</span
+                        >
+                    </div>
+                    <div>
+                        <h3
+                            style="
+                                font-size: 1.25rem;
+                                font-weight: 700;
+                                margin: 0 0 6px 0;
+                                color: #fff;
+                            "
+                        >
+                            Karaoke Mode
+                        </h3>
+                        <p
+                            style="
+                                color: var(--fg-muted);
+                                font-size: 0.88rem;
+                                line-height: 1.45;
+                                margin: 0;
+                            "
+                        >
+                            Synced lyrics with optional vocal separation for a
+                            sing-along view.
+                        </p>
+                    </div>
+                    <div style="margin-top: auto; display: flex; gap: 10px">
+                        <button
+                            type="button"
+                            id="btn-launch-karaoke"
+                            class="btn-primary"
+                            style="
+                                flex: 1;
+                                padding: 10px;
+                                border-radius: 6px;
+                                font-weight: 600;
+                                font-size: 0.88rem;
+                                text-align: center;
+                                justify-content: center;
+                                width: 100%;
+                            "
+                        >
+                            Launch Karaoke
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Karaoke Mode Overlay -->
+        <div id="karaoke-overlay" class="karaoke-overlay hidden">
+            <div class="karaoke-backdrop"></div>
+            <div class="karaoke-shell">
+                <div class="karaoke-topbar">
+                    <div>
+                        <div class="karaoke-eyebrow">Karaoke Mode</div>
+                        <h2 id="karaoke-title" class="karaoke-title">
+                            Ready to sing
+                        </h2>
+                        <p id="karaoke-artist" class="karaoke-artist">
+                            Launch the mode from a track to begin.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        id="karaoke-close-btn"
+                        class="karaoke-close-btn"
+                        title="Close Karaoke Mode"
+                    >
+                        ×
+                    </button>
+                </div>
+
+                <div class="karaoke-layout">
+                    <div class="karaoke-media">
+                        <div id="karaoke-art-wrap" class="karaoke-art-wrap">
+                            <img id="karaoke-art" src="" alt="Track art" />
+                        </div>
+                        <div id="karaoke-status" class="karaoke-status">
+                            Waiting for a track...
+                        </div>
+                    </div>
+
+                    <div id="karaoke-lyrics" class="karaoke-lyrics"></div>
+                </div>
+
+                <div class="karaoke-controls">
+                    <button
+                        type="button"
+                        id="karaoke-btn-separate"
+                        class="karaoke-control-btn"
+                    >
+                        Start vocal separation
+                    </button>
+                    <button
+                        type="button"
+                        id="karaoke-btn-main"
+                        class="karaoke-control-btn karaoke-control-btn-secondary"
+                    >
+                        Use main playback
+                    </button>
+                    <button
+                        type="button"
+                        id="karaoke-btn-restart"
+                        class="karaoke-control-btn karaoke-control-btn-secondary"
+                    >
+                        Restart lyrics
+                    </button>
                 </div>
             </div>
         </div>

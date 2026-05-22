@@ -2,6 +2,9 @@ FROM python:3.13-alpine
 
 LABEL maintainer="Silverarmor"
 
+# Copy uv from the official image
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 # Allow customizing the user/group IDs
 # Default to 1000
 ARG UID=1000
@@ -18,9 +21,6 @@ RUN apk add --no-cache \
     py3-cffi \
     libffi-dev \
     zlib-dev
-
-# Install uv and update pip/wheel
-RUN pip install --upgrade pip uv wheel spotipy
 
 # Create spotdl user and group
 RUN addgroup -g $GID spotdl && \

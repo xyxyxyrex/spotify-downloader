@@ -105,6 +105,30 @@ async function preloadWrappedSong(song, type) {
     }
 
     // 2. Fallback: Query iTunes Search API to fetch 30-second preview clip
+    if (window.__TAURI__?.core?.invoke) {
+        try {
+            const previewUrl = await window.__TAURI__.core.invoke("fetch_itunes_preview", {
+                artist: song.artist,
+                title: song.title,
+            });
+            if (previewUrl) {
+                const audio = new Audio(previewUrl);
+                audio.crossOrigin = "anonymous";
+                wrappedCachedAudio[type] = {
+                    url: previewUrl,
+                    startTime: 0, // iTunes previews start right at the chorus
+                    audio: audio
+                };
+                audio.load();
+                console.log(`Pre-cached fallback iTunes preview via Tauri Rust backend for wrapped song (${type}): "${song.title}"`);
+                return;
+            }
+        } catch (e) {
+            console.debug(`iTunes preview fallback via Tauri Rust backend failed for wrapped song (${type}):`, e);
+        }
+        return; // In Tauri environment, never do a direct frontend fetch to avoid CORS console noise
+    }
+
     try {
         const itunesQuery = `${song.title} ${song.artist}`;
         const url = `https://itunes.apple.com/search?term=${encodeURIComponent(itunesQuery)}&entity=song&limit=1`;
@@ -128,7 +152,7 @@ async function preloadWrappedSong(song, type) {
             }
         }
     } catch (e) {
-        console.error(`iTunes preview fallback check failed for wrapped song (${type}):`, e);
+        console.debug(`Direct iTunes preview fallback fetch failed for wrapped song (${type}) (expected if CORS blocks it):`, e);
     }
 }
 

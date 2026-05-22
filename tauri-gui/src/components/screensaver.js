@@ -10,6 +10,8 @@ import {
 import { isValidImage, generateThumbnail } from "../utils/media.js";
 
 import { resolveArtUrl } from "../art.js";
+import { resolveTrackCoverUrl } from "../utils/cover-art.js";
+import { renderLyricsPanel } from "./lyrics-sync.js";
 
 let screensaverInterval = null;
 let screensaverCursorTimeout = null;
@@ -78,7 +80,7 @@ export function updateScreensaverClock() {
     clockEl.title = `Click to switch to ${timeFormat === "24h" ? "AM/PM" : "24H"}`;
 
     if (dateEl) {
-        dateEl.textContent = new Intl.DateTimeFormat(undefined, {
+        dateEl.textContent = new Intl.DateTimeFormat("en-US", {
             month: "long",
             day: "numeric",
             year: "numeric",
@@ -153,6 +155,8 @@ export async function updateScreensaverUI() {
         artistEl.style.fontSize = "1.8rem";
     }
 
+    await resolveTrackCoverUrl(currentSong);
+
     let artUrl = "";
     if (isValidImage(currentSong.image)) {
         const cached = await resolveArtUrl(currentSong.image);
@@ -178,12 +182,33 @@ export async function updateScreensaverUI() {
             wrap.appendChild(fallback);
         }
     }
+
+    renderLyricsPanel("fullscreen-lyrics");
+}
+
+export function openPureFullscreenLyrics() {
+    const ssOverlay = document.getElementById("fullscreen-screensaver");
+    if (!ssOverlay) return;
+
+    ssOverlay.classList.add("pure-lyrics-mode");
+    if (ssOverlay.classList.contains("hidden")) {
+        ssOverlay.classList.remove("hidden");
+        updateScreensaverUI();
+        resetScreensaverCursorTimer();
+
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch((e) => {
+                console.warn("Fullscreen request rejected:", e);
+            });
+        }
+    }
 }
 
 export function toggleFullscreenScreensaver() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay) return;
 
+    ssOverlay.classList.remove("pure-lyrics-mode");
     if (ssOverlay.classList.contains("hidden")) {
         ssOverlay.classList.remove("hidden");
         startScreensaverClock();
@@ -205,6 +230,7 @@ export function closeFullscreenScreensaver() {
     if (!ssOverlay) return;
 
     ssOverlay.classList.add("hidden");
+    ssOverlay.classList.remove("pure-lyrics-mode");
     stopScreensaverClock();
     clearTimeout(screensaverCursorTimeout);
     ssOverlay.classList.remove("cursor-hidden");
@@ -222,6 +248,8 @@ export function closeFullscreenScreensaver() {
 }
 
 export function initScreensaverEvents() {
+    window.openPureFullscreenLyrics = openPureFullscreenLyrics;
+    window.closeFullscreenScreensaver = closeFullscreenScreensaver;
     const btnSS = document.getElementById("btn-fullscreen-saver");
     if (btnSS) {
         btnSS.addEventListener("click", toggleFullscreenScreensaver);
@@ -231,6 +259,13 @@ export function initScreensaverEvents() {
     if (ssOverlay) {
         ssOverlay.addEventListener("click", closeFullscreenScreensaver);
         ssOverlay.addEventListener("mousemove", resetScreensaverCursorTimer);
+    }
+
+    const ssContent = document.querySelector(".screensaver-content");
+    if (ssContent) {
+        ssContent.addEventListener("click", (e) => {
+            e.stopPropagation(); // Prevent closing screensaver when interacting with lyrics or album art
+        });
     }
 
     const ssClock = document.getElementById("screensaver-clock");

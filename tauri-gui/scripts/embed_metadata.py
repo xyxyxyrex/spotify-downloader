@@ -4,11 +4,48 @@ import json
 import sys
 from pathlib import Path
 
+import urllib.parse
+
 import requests
 import mutagen
 from mutagen.id3 import APIC, TALB, TCON, TIT2, TPE1, COMM
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
+
+LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f"
+
+
+def is_usable_cover_url(url: str | None) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    if LASTFM_PLACEHOLDER in u or "default" in u or "placeholder" in u:
+        return False
+    return True
+
+
+def fetch_itunes_cover(artist: str, title: str) -> str | None:
+    if not artist.strip() or not title.strip():
+        return None
+    query = urllib.parse.quote(f"{artist} {title}")
+    url = f"https://itunes.apple.com/search?term={query}&entity=song&limit=1"
+    try:
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results") or []
+        if not results:
+            return None
+        art = results[0].get("artworkUrl100")
+        if not art:
+            return None
+        art = art.replace("100x100bb.jpg", "600x600bb.jpg").replace(
+            "100x100.jpg", "600x600.jpg"
+        )
+        return art if is_usable_cover_url(art) else None
+    except Exception as e:
+        print(f"Warning: iTunes cover lookup failed: {e}", file=sys.stderr)
+        return None
 
 
 def embed(path: str, meta: dict) -> None:
@@ -24,17 +61,20 @@ def embed(path: str, meta: dict) -> None:
     wiki = meta.get("wiki_summary")
 
     cover_url = meta.get("cover_url")
-    if not cover_url:
+    if not is_usable_cover_url(cover_url):
         album_images = meta.get("album_images") or []
         track_images = meta.get("track_images") or []
         for img in album_images + track_images:
             url = img.get("url") if isinstance(img, dict) else None
-            if url and "2a96cbd8b46e442fc41c2b86b821562f" not in url:
+            if is_usable_cover_url(url):
                 cover_url = url
                 break
 
+    if not is_usable_cover_url(cover_url):
+        cover_url = fetch_itunes_cover(artist, title)
+
     cover_data = None
-    if cover_url:
+    if cover_url and is_usable_cover_url(cover_url):
         try:
             resp = requests.get(cover_url, timeout=15)
             resp.raise_for_status()

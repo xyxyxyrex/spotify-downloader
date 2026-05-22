@@ -1,3 +1,5 @@
+import { resolveTrackCoverUrl } from "./utils/cover-art.js";
+
 const { invoke } = window.__TAURI__.core;
 
 const blobCache = new Map();
@@ -35,6 +37,7 @@ export async function resolveArtUrl(url) {
 
 export async function applyArtToElement(parent, song, size, generateThumbnail) {
   parent.innerHTML = '';
+  await resolveTrackCoverUrl(song);
   const url = song.image;
   if (isValidImage(url)) {
     const cached = await resolveArtUrl(url);
