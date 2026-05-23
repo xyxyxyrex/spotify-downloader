@@ -1,5 +1,5 @@
 {
-  "version": "0.3.1",
+  "version": "0.3.2",
   "notes": "Added Wipe all data button in Settings with optional downloaded music cleanup, and full cache/history/playlist reset.",
   "pub_date": "2026-05-23T22:12:00+08:00",
   "platforms": {
