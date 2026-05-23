@@ -925,11 +925,34 @@ async fn try_lrclib_lyrics(client: &reqwest::Client, artist: &str, title: &str) 
     None
 }
 
+fn is_vietnamese_lyrics(text: &str) -> bool {
+    let vn_chars = [
+        'đ', 'Đ', 'ư', 'Ư', 'ơ', 'Ơ', 'ả', 'Ả', 'ẻ', 'Ẻ', 'ỉ', 'Ỉ', 'ỏ', 'Ỏ', 'ủ', 'Ủ', 'ỷ', 'Ỷ',
+        'ã', 'Ã', 'ẽ', 'Ẽ', 'ĩ', 'Ĩ', 'õ', 'Õ', 'ũ', 'Ũ', 'ỹ', 'Ỹ',
+        'ạ', 'Ạ', 'ẹ', 'Ẹ', 'ị', 'Ị', 'ọ', 'Ọ', 'ụ', 'Ụ', 'ỵ', 'Ỵ',
+        'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ',
+        'ế', 'ề', 'ể', 'ễ', 'ệ', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ',
+        'ớ', 'ờ', 'ở', 'ỡ', 'ợ', 'ứ', 'ừ', 'ử', 'ữ', 'ự'
+    ];
+    let mut count = 0;
+    for c in text.chars() {
+        if vn_chars.contains(&c) {
+            count += 1;
+            if count >= 3 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 async fn try_lrclib_lyrics_payload(
     client: &reqwest::Client,
     artist: &str,
     title: &str,
 ) -> Option<LyricsPayload> {
+    let is_target_vietnamese = is_vietnamese_lyrics(artist);
+
     // 1. Try exact match query
     let get_url = format!(
         "https://lrclib.net/api/get?artist_name={}&track_name={}",
@@ -945,7 +968,6 @@ async fn try_lrclib_lyrics_payload(
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
                     .unwrap_or("");
-                let synced = parse_synced_lyrics(synced_raw);
                 let plain = item
                     .get("plainLyrics")
                     .and_then(|v| v.as_str())
@@ -954,26 +976,30 @@ async fn try_lrclib_lyrics_payload(
                     .map(str::to_string)
                     .unwrap_or_default();
 
-                if !synced.is_empty() {
-                    return Some(LyricsPayload {
-                        source: "lrclib".to_string(),
-                        plain: if !plain.is_empty() {
-                            plain
-                        } else {
-                            synced
-                                .iter()
-                                .map(|line| line.text.clone())
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        },
-                        synced,
-                    });
-                } else if !plain.is_empty() {
-                    return Some(LyricsPayload {
-                        source: "lrclib".to_string(),
-                        plain,
-                        synced: Vec::new(),
-                    });
+                // Skip if this is a Vietnamese translation but the target is not Vietnamese
+                if is_target_vietnamese || (!is_vietnamese_lyrics(synced_raw) && !is_vietnamese_lyrics(&plain)) {
+                    let synced = parse_synced_lyrics(synced_raw);
+                    if !synced.is_empty() {
+                        return Some(LyricsPayload {
+                            source: "lrclib".to_string(),
+                            plain: if !plain.is_empty() {
+                                plain
+                            } else {
+                                synced
+                                    .iter()
+                                    .map(|line| line.text.clone())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            },
+                            synced,
+                        });
+                    } else if !plain.is_empty() {
+                        return Some(LyricsPayload {
+                            source: "lrclib".to_string(),
+                            plain,
+                            synced: Vec::new(),
+                        });
+                    }
                 }
             }
         }
@@ -991,7 +1017,7 @@ async fn try_lrclib_lyrics_payload(
     }
     let arr: Vec<Value> = response.json().await.ok()?;
 
-    // First pass: try to find any item with synced lyrics
+    // First pass: try to find any item with synced lyrics that matches target language profile
     for item in &arr {
         let synced_raw = item
             .get("syncedLyrics")
@@ -999,15 +1025,21 @@ async fn try_lrclib_lyrics_payload(
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .unwrap_or("");
+        let plain = item
+            .get("plainLyrics")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_default();
+
+        // Skip Vietnamese translations for non-Vietnamese tracks
+        if !is_target_vietnamese && (is_vietnamese_lyrics(synced_raw) || is_vietnamese_lyrics(&plain)) {
+            continue;
+        }
+
         let synced = parse_synced_lyrics(synced_raw);
         if !synced.is_empty() {
-            let plain = item
-                .get("plainLyrics")
-                .and_then(|v| v.as_str())
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string)
-                .unwrap_or_default();
             return Some(LyricsPayload {
                 source: "lrclib".to_string(),
                 plain: if !plain.is_empty() {
@@ -1024,7 +1056,7 @@ async fn try_lrclib_lyrics_payload(
         }
     }
 
-    // Second pass: fall back to the first item with plain lyrics
+    // Second pass: fall back to the first item with plain lyrics that matches target language profile
     for item in &arr {
         let plain = item
             .get("plainLyrics")
@@ -1033,6 +1065,12 @@ async fn try_lrclib_lyrics_payload(
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .unwrap_or_default();
+
+        // Skip Vietnamese translations for non-Vietnamese tracks
+        if !is_target_vietnamese && is_vietnamese_lyrics(&plain) {
+            continue;
+        }
+
         if !plain.is_empty() {
             return Some(LyricsPayload {
                 source: "lrclib".to_string(),
