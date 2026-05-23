@@ -3791,8 +3791,8 @@ body.dragging-active #playlist-list li * {
     height: 130%;
     background-position: center;
     background-size: cover;
-    /* Apply SVG Liquid Warp filter + blur + brightness + saturation */
-    filter: url(#liquid-warp) blur(60px) brightness(0.36) saturate(1.75);
+    /* Apply SVG Liquid Warp filter AFTER the blur so warped waves are rendered with sharp, glassmorphic liquid definition */
+    filter: blur(40px) url(#liquid-warp) brightness(0.52) saturate(1.85);
     transform: scale(1.05);
     transition: background-image 0.9s cubic-bezier(0.25, 1, 0.5, 1);
     z-index: 1;
@@ -3803,45 +3803,45 @@ body.dragging-active #playlist-list li * {
 .screensaver-bg-glow {
     position: absolute;
     border-radius: 50%;
-    opacity: 0.88;
+    opacity: 0.92;
     mix-blend-mode: screen; /* Blend colors beautifully */
     transition: background-color 1.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .blob-1 {
-    width: 60%;
-    height: 60%;
-    top: -10%;
-    left: -10%;
+    width: 75%;
+    height: 75%;
+    top: -15%;
+    left: -15%;
     background-color: rgba(231, 76, 60, 0.45);
-    animation: liquid-drift-1 25s infinite alternate ease-in-out;
+    animation: liquid-drift-1 18s infinite alternate ease-in-out;
 }
 
 .blob-2 {
-    width: 55%;
-    height: 55%;
-    bottom: -10%;
-    right: -10%;
+    width: 70%;
+    height: 70%;
+    bottom: -15%;
+    right: -15%;
     background-color: rgba(52, 152, 219, 0.45);
-    animation: liquid-drift-2 28s infinite alternate ease-in-out;
+    animation: liquid-drift-2 20s infinite alternate ease-in-out;
 }
 
 .blob-3 {
-    width: 50%;
-    height: 50%;
-    top: 40%;
-    left: 30%;
+    width: 65%;
+    height: 65%;
+    top: 30%;
+    left: 20%;
     background-color: rgba(155, 89, 182, 0.4);
-    animation: liquid-drift-3 22s infinite alternate ease-in-out;
+    animation: liquid-drift-3 15s infinite alternate ease-in-out;
 }
 
 .blob-4 {
-    width: 45%;
-    height: 45%;
-    bottom: 20%;
-    left: -5%;
+    width: 60%;
+    height: 60%;
+    bottom: 10%;
+    left: -10%;
     background-color: rgba(46, 204, 113, 0.35);
-    animation: liquid-drift-4 30s infinite alternate ease-in-out;
+    animation: liquid-drift-4 22s infinite alternate ease-in-out;
 }
 
 /* Hardware-Accelerated 2D Fluid Drift Transitions */
