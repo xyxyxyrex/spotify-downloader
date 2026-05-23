@@ -3806,11 +3806,11 @@ body.dragging-active #playlist-list li * {
     grid-template-rows: 100%; /* Strict constraint on row height to prevent shifting */
     align-items: center;
     justify-content: center;
-    width: 82%;
-    max-width: 1300px;
+    width: 90%; /* Expanded from 82% to utilize wide screen space */
+    max-width: 1750px; /* Increased from 1300px to fill high-res 1440p+ viewports perfectly */
     gap: clamp(20px, 5vw, 80px);
-    height: 70vh; /* Locked, responsive height */
-    max-height: 70vh; /* Strictly capped to stop vertical shifting entirely */
+    height: 84vh; /* Increased from 78vh for premium responsive filling */
+    max-height: 84vh; /* Strictly capped to stop vertical shifting entirely */
     min-height: 500px;
     overflow: visible;
 }
@@ -3828,8 +3828,8 @@ body.dragging-active #playlist-list li * {
 /* Rounded, Floating Premium Cover Art Shadow */
 .screensaver-art-wrap {
     position: relative;
-    width: clamp(240px, 35vh, 420px);
-    height: clamp(240px, 35vh, 420px);
+    width: clamp(240px, 42vh, 560px); /* Expanded to look extremely premium on 1440p */
+    height: clamp(240px, 42vh, 560px);
     border-radius: 24px;
     overflow: hidden;
     box-shadow: 0 35px 80px rgba(0, 0, 0, 0.92);
@@ -3860,7 +3860,7 @@ body.dragging-active #playlist-list li * {
 }
 
 .screensaver-title {
-    font-size: clamp(1.8rem, 2.5vh, 3.2rem);
+    font-size: clamp(2rem, 3.5vh, 4rem); /* Scaled up for 1440p displays */
     font-weight: 800;
     color: #ffffff;
     text-shadow: 0 4px 18px rgba(0, 0, 0, 0.7);
@@ -3871,7 +3871,7 @@ body.dragging-active #playlist-list li * {
 }
 
 .screensaver-artist {
-    font-size: clamp(1.1rem, 1.6vh, 1.8rem);
+    font-size: clamp(1.2rem, 2.2vh, 2.2rem); /* Scaled up for 1440p displays */
     font-weight: 500;
     color: rgba(255, 255, 255, 0.72);
     text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
@@ -3893,7 +3893,7 @@ body.dragging-active #playlist-list li * {
 }
 
 .screensaver-clock {
-    font-size: clamp(4rem, 8vh, 8.5rem);
+    font-size: clamp(5rem, 11vh, 11rem); /* Expanded giant display clock for 1440p */
     font-weight: 800;
     font-family:
         "Outfit",
@@ -3921,7 +3921,7 @@ body.dragging-active #playlist-list li * {
 }
 
 .screensaver-date {
-    font-size: clamp(1.4rem, 2.8vh, 3.2rem);
+    font-size: clamp(1.6rem, 3.2vh, 3.8rem); /* Expanded giant display date for 1440p */
     font-weight: 600;
     font-family:
         "Outfit",
@@ -5292,16 +5292,16 @@ body.dragging-active #playlist-list li * {
 }
 
 #fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-right.lyrics-active .screensaver-time-wrap {
-    transform: translateY(-22vh) !important; /* Shift higher up to completely clear the lyrics panel */
+    transform: translateY(-25vh) !important; /* Shift higher up to completely clear the lyrics panel and accommodate larger clock */
 }
 
 /* When NOT in pure-lyrics-mode, position the lyrics panel absolute at the bottom and transition smoothly */
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel {
     position: absolute !important;
-    bottom: clamp(10px, 3.5vh, 35px) !important; /* Position slightly lower to maximize gap */
+    bottom: clamp(10px, 1.5vh, 20px) !important; /* Position slightly lower to maximize space utilization */
     right: clamp(20px, 4vw, 60px) !important;
     width: calc(100% - clamp(40px, 8vw, 120px)) !important;
-    max-height: 38vh !important; /* Constrain height to guarantee zero overlap with clock */
+    max-height: 46vh !important; /* Constrain height to guarantee zero overlap with clock */
     z-index: 15 !important;
     align-self: flex-end !important;
     opacity: 0 !important;
@@ -5319,13 +5319,13 @@ body.dragging-active #playlist-list li * {
 
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .synced-lyrics-list,
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .lyrics-plain {
-    max-height: 30vh !important; /* Cap height to fit cleanly within 38vh panel and prevent overlaps */
+    max-height: 40vh !important; /* Expanded height to utilize taller layout on 1440p */
 }
 
 /* When .pure-lyrics-mode is active, hide clock & date, hide lyrics toggle button, and expand layout height */
 #fullscreen-screensaver.pure-lyrics-mode .screensaver-content {
-    height: 90vh !important;
-    max-height: 90vh !important;
+    height: 92vh !important; /* Expanded height for 1440p */
+    max-height: 92vh !important;
     grid-template-rows: 100% !important;
 }
 
@@ -5337,7 +5337,7 @@ body.dragging-active #playlist-list li * {
 }
 
 #fullscreen-screensaver.pure-lyrics-mode .screensaver-right {
-    height: 90% !important;
+    height: 100% !important; /* Stretched to fill vertical space */
     justify-content: center !important;
     align-items: stretch !important;
     padding-left: 80px !important;
@@ -5345,7 +5345,7 @@ body.dragging-active #playlist-list li * {
 
 #fullscreen-screensaver.pure-lyrics-mode .fullscreen-lyrics-panel {
     position: static !important;
-    max-height: 85vh !important;
+    max-height: 90vh !important; /* Expanded max height */
     margin-top: 0 !important;
     display: flex;
     flex-direction: column;
@@ -5353,15 +5353,15 @@ body.dragging-active #playlist-list li * {
 
 #fullscreen-screensaver.pure-lyrics-mode .fullscreen-lyrics-panel .synced-lyrics-list,
 #fullscreen-screensaver.pure-lyrics-mode .fullscreen-lyrics-panel .lyrics-plain {
-    max-height: 75vh !important;
-    height: 75vh !important;
+    max-height: 84vh !important; /* Expanded from 75vh to utilize screenspace beautifully on 1440p */
+    height: 84vh !important;
 }
 
 /* Elegant line typography and styling for pure lyrics fullscreen mode */
 #fullscreen-screensaver.pure-lyrics-mode .fullscreen-lyrics-panel .synced-lyric-line {
-    font-size: clamp(1.8rem, 2vw + 1.2rem, 3rem) !important;
-    line-height: 1.4 !important;
-    padding: 12px 16px !important;
+    font-size: clamp(2rem, 2.5vw + 1.2rem, 3.4rem) !important; /* Slightly enlarged for premium presence on 1440p */
+    line-height: 1.45 !important;
+    padding: 14px 18px !important;
     text-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
     transition: all 0.3s ease !important;
 }
