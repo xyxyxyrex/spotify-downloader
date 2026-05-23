@@ -1601,9 +1601,13 @@ function refreshContextMenuForGroup(group) {
 }
 
 function getSongSelectionKey(song) {
-    return song?.playlist_track_id
-        ? `playlist-track:${song.playlist_track_id}`
-        : `song:${songKey(song)}`;
+    if (song?.playlist_track_id) {
+        return `playlist-track:${song.playlist_track_id}`;
+    }
+    if (!song?._selection_id) {
+        song._selection_id = `song_${Math.random().toString(36).slice(2, 9)}_${Date.now()}`;
+    }
+    return `song:${song._selection_id}`;
 }
 
 function getSelectedSongs() {
@@ -8206,6 +8210,16 @@ async function updateScreensaverUI() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay || ssOverlay.classList.contains("hidden")) return;
 
+    // Set taskbar offset for positioning adjustments in non-pure fullscreen
+    let offset = 0;
+    if (!document.fullscreenElement) {
+        const taskbarHeight = window.screen.height - window.screen.availHeight;
+        if (taskbarHeight > 0) {
+            offset = taskbarHeight;
+        }
+    }
+    ssOverlay.style.setProperty("--taskbar-offset", `${offset}px`);
+
     const titleEl = document.getElementById("screensaver-title");
     const artistEl = document.getElementById("screensaver-artist");
     const artImg = document.getElementById("screensaver-art");
@@ -8495,6 +8509,13 @@ function initScreensaverEvents() {
             if (ss && !ss.classList.contains("hidden")) {
                 closeFullscreenScreensaver();
             }
+        }
+    });
+
+    window.addEventListener("resize", () => {
+        const ss = document.getElementById("fullscreen-screensaver");
+        if (ss && !ss.classList.contains("hidden")) {
+            updateScreensaverUI();
         }
     });
 }

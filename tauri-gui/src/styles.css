@@ -3766,6 +3766,8 @@ body.dragging-active #playlist-list li * {
     bottom: 0;
     width: 100%;
     height: 100%;
+    padding-bottom: var(--taskbar-offset, 0px) !important;
+    box-sizing: border-box !important;
     z-index: 10000;
     background-color: #000;
     display: flex;
@@ -4046,7 +4048,7 @@ body.dragging-active #playlist-list li * {
 /* Soft Close Instructions */
 .screensaver-close-hint {
     position: absolute;
-    bottom: 40px;
+    bottom: calc(40px + var(--taskbar-offset, 0px)) !important;
     left: 50%;
     transform: translateX(-50%);
     font-size: 0.8rem;
@@ -4072,7 +4074,7 @@ body.dragging-active #playlist-list li * {
 /* Subtle, Glassmorphic Floating Screensaver Controls */
 .screensaver-controls {
     position: absolute;
-    bottom: 95px;
+    bottom: calc(95px + var(--taskbar-offset, 0px)) !important;
     left: 50%;
     transform: translateX(-50%);
     z-index: 100;
@@ -5405,7 +5407,7 @@ body.dragging-active #playlist-list li * {
 /* When NOT in pure-lyrics-mode, position the lyrics panel absolute at the bottom and transition smoothly */
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel {
     position: absolute !important;
-    bottom: clamp(10px, 1.5vh, 20px) !important; /* Position slightly lower to maximize space utilization */
+    bottom: calc(clamp(10px, 1.5vh, 20px) + var(--taskbar-offset, 0px)) !important; /* Position slightly lower to maximize space utilization */
     right: clamp(20px, 4vw, 60px) !important;
     width: calc(100% - clamp(40px, 8vw, 120px)) !important;
     max-height: 46vh !important; /* Constrain height to guarantee zero overlap with clock */
