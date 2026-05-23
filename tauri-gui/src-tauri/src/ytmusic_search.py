@@ -8,6 +8,16 @@ try:
 except Exception:
     kakasi_instance = None
 
+def normalize_romaji(word):
+    val = word.lower()
+    # Consonant voicing normalization (Japanese dakuten/handakuten fuzzy matching)
+    val = val.replace('g', 'k')
+    val = val.replace('z', 's')
+    val = val.replace('d', 't')
+    val = val.replace('b', 'h')
+    val = val.replace('p', 'h')
+    return val
+
 def clean_text(text):
     if not text:
         return set()
@@ -28,6 +38,14 @@ def clean_text(text):
             words.update(romaji_words)
         except Exception:
             pass
+            
+    # Add normalized romaji versions for all words to enable fuzzy Japanese consonant matching
+    normalized_words = set()
+    for w in words:
+        norm = normalize_romaji(w)
+        if norm != w:
+            normalized_words.add(norm)
+    words.update(normalized_words)
             
     return words
 
@@ -110,10 +128,18 @@ def find_best_match(results, target_title, target_artist, target_duration):
         score = (title_score * 0.45 + artist_score * 0.45 + type_bonus) * duration_multiplier
 
         res_title_lower = res_title.lower()
-        if 'cover' in res_title_lower and 'cover' not in target_title.lower():
-            score *= 0.1
-        if 'remix' in res_title_lower and 'remix' not in target_title.lower():
-            score *= 0.1
+        # Penalize covers, instrumentals, karaoke, synthesia, loops, etc. unless explicitly requested in target
+        cover_indicators = [
+            'cover', 'remix', 'instrumental', 'karaoke', 'piano', 'violin', 'acoustic', 
+            'kalimba', 'music box', 'orgel', 'musicbox', 'covers', 'synthesia', 'tutorial', 
+            'guitar', 'flute', 'brass', 'orchestra', 'tribute', 'synth', '8bit', '8-bit', 
+            'chiptune', 'loop', '1hour', '1 hour', 'カバー', '歌ってみた', '演奏してみた', 
+            'オルゴール', 'カラオケ', 'ピアノ'
+        ]
+        for indicator in cover_indicators:
+            if indicator in res_title_lower and indicator not in target_title.lower():
+                score *= 0.05
+                break
 
         if score > best_score:
             best_score = score
