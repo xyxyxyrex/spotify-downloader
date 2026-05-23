@@ -61,7 +61,7 @@ const TAROT_PROFILES = [
     key: "theMagician",
     name: "The Magician",
     folder: "1_theMagician",
-    file: "1_theMagician_5x.png",
+    file: "1_TheMagician_5x.png",
     mysticTitle: "The Alchemist of Sound",
     gamingStats: {
       tempo: 78,
