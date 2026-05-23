@@ -8219,8 +8219,10 @@ async function updateScreensaverUI() {
     }
 
     const lyricsPanel = document.getElementById("fullscreen-lyrics");
-    if (lyricsPanel) {
+    const rightPanel = ssOverlay.querySelector(".screensaver-right");
+    if (lyricsPanel && rightPanel) {
         const isPureLyrics = ssOverlay.classList.contains("pure-lyrics-mode");
+        rightPanel.classList.toggle("lyrics-active", ssLyricsVisible && !isPureLyrics);
         if (ssLyricsVisible || isPureLyrics) {
             lyricsPanel.classList.remove("hidden");
             renderLyricsPanel("fullscreen-lyrics");

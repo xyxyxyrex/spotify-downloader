@@ -5275,9 +5275,9 @@ body.dragging-active #playlist-list li * {
     transition: none !important; /* Keep it perfectly static */
 }
 
-/* Force the right side to align items to the top so clock/date stay high up and never shift when lyrics are toggled */
+/* Align items to center vertically by default for a perfectly balanced clock placement */
 #fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-right {
-    justify-content: flex-start !important;
+    justify-content: center !important;
     align-self: stretch !important; /* Force grid container to stretch so height remains completely constant */
     height: 100% !important;
     position: relative !important;
@@ -5286,19 +5286,40 @@ body.dragging-active #playlist-list li * {
     align-items: flex-end !important;
 }
 
-/* When NOT in pure-lyrics-mode, position the lyrics panel directly below the date (MM/DD/YY) in screensaver-right */
+#fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-time-wrap {
+    transition: transform 0.65s cubic-bezier(0.34, 1.56, 0.64, 1) !important;
+    transform: translateY(0);
+}
+
+#fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-right.lyrics-active .screensaver-time-wrap {
+    transform: translateY(clamp(-90px, -13vh, -140px)) !important;
+}
+
+/* When NOT in pure-lyrics-mode, position the lyrics panel absolute at the bottom and transition smoothly */
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel {
-    position: relative !important;
-    width: 100% !important;
-    max-height: 45vh !important; /* Increased to display more lines */
-    margin-top: clamp(15px, 3vh, 35px) !important; /* Positioned directly below the date */
+    position: absolute !important;
+    bottom: clamp(20px, 5vh, 60px) !important;
+    right: clamp(20px, 4vw, 60px) !important;
+    width: calc(100% - clamp(40px, 8vw, 120px)) !important;
+    max-height: 42vh !important; /* Adjusted to fit perfectly in absolute position */
     z-index: 15 !important;
     align-self: flex-end !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transform: translateY(40px) !important;
+    transition: transform 0.65s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.5s ease !important;
+    display: block !important; /* Keep it block-rendered to allow smooth transitions */
+}
+
+#fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-right.lyrics-active .fullscreen-lyrics-panel {
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    transform: translateY(0) !important;
 }
 
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .synced-lyrics-list,
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .lyrics-plain {
-    max-height: 38vh !important; /* Expanded internally to match */
+    max-height: 35vh !important; /* Expanded internally to match */
 }
 
 /* When .pure-lyrics-mode is active, hide clock & date, hide lyrics toggle button, and expand layout height */
