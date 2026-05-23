@@ -3792,7 +3792,7 @@ body.dragging-active #playlist-list li * {
     background-position: center;
     background-size: cover;
     /* Apply SVG Liquid Warp filter + blur + brightness + saturation */
-    filter: url(#liquid-warp) blur(70px) brightness(0.24) saturate(1.4);
+    filter: url(#liquid-warp) blur(60px) brightness(0.36) saturate(1.75);
     transform: scale(1.05);
     transition: background-image 0.9s cubic-bezier(0.25, 1, 0.5, 1);
     z-index: 1;
@@ -3803,8 +3803,7 @@ body.dragging-active #playlist-list li * {
 .screensaver-bg-glow {
     position: absolute;
     border-radius: 50%;
-    filter: blur(40px);
-    opacity: 0.65;
+    opacity: 0.88;
     mix-blend-mode: screen; /* Blend colors beautifully */
     transition: background-color 1.2s cubic-bezier(0.25, 1, 0.5, 1);
 }
