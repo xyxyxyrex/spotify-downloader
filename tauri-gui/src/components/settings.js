@@ -14,7 +14,10 @@ const downloadDirInput = document.getElementById("download-dir-input");
 const spotifyIdInput = document.getElementById("spotify-id-input");
 const spotifySecretInput = document.getElementById("spotify-secret-input");
 const lastfmApiKeyInput = document.getElementById("lastfm-api-key-input");
+const closeBehaviorSelect = document.getElementById("close-behavior-select");
 const settingsStatus = document.getElementById("settings-status");
+const wipeDeleteMusicCheckbox = document.getElementById("wipe-delete-music-checkbox");
+const btnWipeAllData = document.getElementById("btn-wipe-all-data");
 
 export async function loadSettingsUI() {
     try {
@@ -32,6 +35,7 @@ export async function loadSettingsUI() {
         const ssec =
             settings.spotifyClientSecret ?? settings.spotify_client_secret;
         const lfm = settings.lastfmApiKey ?? settings.lastfm_api_key;
+        const closeBehavior = settings.closeBehavior ?? settings.close_behavior ?? "prompt";
 
         cacheDirInput.value = cdir || "";
         downloadDirInput.value = ddir || "";
@@ -39,6 +43,9 @@ export async function loadSettingsUI() {
         spotifySecretInput.value = ssec || "";
         if (lastfmApiKeyInput) {
             lastfmApiKeyInput.value = lfm || "";
+        }
+        if (closeBehaviorSelect) {
+            closeBehaviorSelect.value = closeBehavior;
         }
         cacheDirInput.placeholder = cachePath;
         downloadDirInput.placeholder = downloadPath;
@@ -370,6 +377,7 @@ export function setupSettings() {
                         spotifyClientSecret:
                             spotifySecretInput.value.trim() || null,
                         lastfmApiKey: lastfmApiKeyInput?.value.trim() || null,
+                        closeBehavior: closeBehaviorSelect?.value || null,
                     },
                 });
                 await loadSettingsUI();
@@ -391,6 +399,7 @@ export function setupSettings() {
                         spotifyClientId: "",
                         spotifyClientSecret: "",
                         lastfmApiKey: "",
+                        closeBehavior: "prompt",
                     },
                 });
                 cacheDirInput.value = "";
@@ -462,6 +471,7 @@ export function setupSettings() {
                         spotifyClientId: data.settings.spotifyClientId ?? data.settings.spotify_client_id ?? null,
                         spotifyClientSecret: data.settings.spotifyClientSecret ?? data.settings.spotify_client_secret ?? null,
                         lastfmApiKey: data.settings.lastfmApiKey ?? data.settings.lastfm_api_key ?? null,
+                        closeBehavior: data.settings.closeBehavior ?? data.settings.close_behavior ?? null,
                     }
                 });
             }
@@ -569,6 +579,37 @@ export function setupSettings() {
         } catch (err) {
             setSettingsStatus(`Import failed: ${err}`, "err");
         }
+    });
+
+    btnWipeAllData?.addEventListener("click", () => {
+        if (!wipeDeleteMusicCheckbox) return;
+        
+        const shouldDeleteMusic = wipeDeleteMusicCheckbox.checked;
+        const warningMsg = shouldDeleteMusic 
+            ? `<p style="color: var(--err, #ff5555); font-weight: 700; margin-top: 8px;">WARNING: This will also permanently delete all downloaded music files in your download folder!</p>`
+            : "";
+
+        showModal(
+            "Wipe All Data",
+            `<div style="display: flex; flex-direction: column; gap: 10px; line-height: 1.5; color: var(--fg); font-size: 0.95rem;">
+                <p>Are you absolutely sure you want to wipe all data? This action is <strong style="color: var(--err, #ff5555);">irreversible</strong>.</p>
+                <p>This will reset all settings to defaults, clear all local playlists, wipe play history, and empty caches.</p>
+                ${warningMsg}
+            </div>`,
+            async () => {
+                try {
+                    setSettingsStatus("Wiping all data...", "loading");
+                    await invoke("wipe_all_data", { deleteDownloads: shouldDeleteMusic });
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    window.location.reload();
+                } catch (err) {
+                    setSettingsStatus(`Wipe failed: ${err}`, "err");
+                    return false;
+                }
+            },
+            "Wipe Everything"
+        );
     });
 }
 

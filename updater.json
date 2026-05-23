@@ -1,7 +1,7 @@
 {
-  "version": "0.3.0",
-  "notes": "Frictionless Single-Click User Space Setup, Screensaver Synced Lyrics Overhaul, Date Layout Stabilization, and Vertical Container Expansion.",
-  "pub_date": "2026-05-23T05:20:00+08:00",
+  "version": "0.3.1",
+  "notes": "Added Wipe all data button in Settings with optional downloaded music cleanup, and full cache/history/playlist reset.",
+  "pub_date": "2026-05-23T22:12:00+08:00",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHJwL2RGTmtvTzVIaEF6cHRZVkszNk1nc3JpaTNZTXhKeXpnS3JSTnZ2UUYrS2xYQnpEbG5STG9vZU5Qd29BTFRvLys5dGV3c3Q4d3pIUW9PZkEzR2dVPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NDg1NDYyCWZpbGU6U3BvdERMIEdVSV8wLjMuMF94NjQtc2V0dXAuZXhlCkxkb2lMbG9HN2xBd3VzVTZMMWRwQTJrR295MWhYamtlQnQ3VHFqY3p3bEVFRGpycHFkMjdWakhRS1F1ajlBNkhtcFY1WnlRMnRYOGhRWmh5eG0vekRnPT0K",

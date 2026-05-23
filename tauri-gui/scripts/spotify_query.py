@@ -153,24 +153,54 @@ def _score_track(query: str, track: dict) -> float:
     title = track.get("title") or track.get("name") or ""
     artist = track.get("artist") or ""
     album = track.get("album") or ""
-    return max(
+    
+    is_non_ascii = bool(re.search(r'[^\x00-\x7F]', title + artist + album))
+    
+    base_score = max(
         _relevance(query, title),
         _relevance(query, f"{title} {artist}") * 0.92,
         _relevance(query, album) * 0.72,
     )
+    
+    if is_non_ascii and base_score < 50.0:
+        orig_idx = track.get("original_index", 100)
+        boost = max(0.0, 85.0 - orig_idx * 5.0)
+        return max(base_score, boost)
+        
+    return base_score
 
 
 def _score_album(query: str, album: dict) -> float:
     name = album.get("name") or ""
     artist = album.get("artist") or ""
-    return max(
+    
+    is_non_ascii = bool(re.search(r'[^\x00-\x7F]', name + artist))
+    
+    base_score = max(
         _relevance(query, name),
         _relevance(query, f"{name} {artist}") * 0.9,
     )
+    
+    if is_non_ascii and base_score < 50.0:
+        orig_idx = album.get("original_index", 100)
+        boost = max(0.0, 85.0 - orig_idx * 5.0)
+        return max(base_score, boost)
+        
+    return base_score
 
 
 def _score_artist(query: str, artist: dict) -> float:
-    return _relevance(query, artist.get("name") or "")
+    name = artist.get("name") or ""
+    is_non_ascii = bool(re.search(r'[^\x00-\x7F]', name))
+    
+    base_score = _relevance(query, name)
+    
+    if is_non_ascii and base_score < 50.0:
+        orig_idx = artist.get("original_index", 100)
+        boost = max(0.0, 85.0 - orig_idx * 5.0)
+        return max(base_score, boost)
+        
+    return base_score
 
 
 def _pick_primary_section(
@@ -203,6 +233,13 @@ def _finalize_search_results(
     albums: list,
     artists: list,
 ) -> dict:
+    for i, track in enumerate(tracks):
+        track["original_index"] = i
+    for i, album in enumerate(albums):
+        album["original_index"] = i
+    for i, artist in enumerate(artists):
+        artist["original_index"] = i
+
     for track in tracks:
         track["match_score"] = _score_track(query, track)
     for album in albums:
@@ -222,6 +259,7 @@ def _finalize_search_results(
     for items in (tracks, albums, artists):
         for item in items:
             item.pop("match_score", None)
+            item.pop("original_index", None)
 
     return {
         "type": "search_results",

@@ -1109,7 +1109,7 @@ function resolvePlaybackQueueForSong(song, explicitQueue) {
 
 function getNextQueueIndex() {
     if (appQueue.length === 0) return -1;
-    if (appQueue.length === 1) return 0;
+    if (appQueue.length === 1) return loopMode === "all" ? 0 : -1;
     if (shuffleOn) {
         let next;
         let attempts = 0;
@@ -3024,6 +3024,12 @@ window.addEventListener("DOMContentLoaded", async () => {
         true,
     );
 
+    if (window.__TAURI__ && window.__TAURI__.event) {
+        window.__TAURI__.event.listen("close-requested", () => {
+            handleAppClose();
+        });
+    }
+
     setupTitleBar();
     setupNavigation();
     setupSearch();
@@ -3083,10 +3089,172 @@ window.addEventListener("DOMContentLoaded", async () => {
     });
 });
 
+export async function handleAppClose() {
+    try {
+        const settings = await invoke("get_settings");
+        const behavior = settings.closeBehavior ?? settings.close_behavior ?? "prompt";
+        
+        if (behavior === "minimize") {
+            await invoke("window_hide");
+            return;
+        } else if (behavior === "exit") {
+            await invoke("exit_app");
+            return;
+        }
+
+        const bodyHtml = `
+            <div class="close-behavior-modal" style="display: flex; flex-direction: column; gap: 16px; font-family: monospace;">
+                <p style="margin: 0; font-size: 0.95rem; line-height: 1.5; color: var(--fg-main);">
+                    How would you like to close the application?
+                </p>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 14px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s ease;">
+                        <input type="radio" name="close-action" value="minimize" checked style="accent-color: var(--accent); margin: 0; cursor: pointer; width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex-shrink: 0;" />
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="font-weight: 600; font-size: 0.9rem; color: var(--fg-main);">Minimize to system tray</span>
+                            <span style="font-size: 0.75rem; color: var(--fg-muted);">Keep running in background</span>
+                        </div>
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 10px 14px; background: var(--bg-hover); border: 1px solid var(--border); border-radius: 6px; transition: all 0.2s ease;">
+                        <input type="radio" name="close-action" value="exit" style="accent-color: var(--accent); margin: 0; cursor: pointer; width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex-shrink: 0;" />
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="font-weight: 600; font-size: 0.9rem; color: var(--fg-main);">Exit program</span>
+                            <span style="font-size: 0.75rem; color: var(--fg-muted);">Shut down application completely</span>
+                        </div>
+                    </label>
+                </div>
+                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.85rem; color: var(--fg-muted); padding: 4px 0 0 4px;">
+                    <input type="checkbox" id="close-remember" style="accent-color: var(--accent); margin: 0; cursor: pointer; width: 16px; height: 16px; min-width: 16px; min-height: 16px; flex-shrink: 0;" />
+                    Remember my choice
+                </label>
+            </div>
+        `;
+
+        showModal(
+            "Close Application",
+            bodyHtml,
+            async () => {
+                const actionInput = document.querySelector('input[name="close-action"]:checked');
+                const action = actionInput ? actionInput.value : "minimize";
+                const remember = document.getElementById("close-remember")?.checked || false;
+
+                if (remember) {
+                    try {
+                        await invoke("set_settings", {
+                            input: {
+                                closeBehavior: action,
+                            },
+                        });
+                        const selectEl = document.getElementById("close-behavior-select");
+                        if (selectEl) {
+                            selectEl.value = action;
+                        }
+                    } catch (err) {
+                        console.error("Failed to save close behavior setting:", err);
+                    }
+                }
+
+                if (action === "minimize") {
+                    await invoke("window_hide");
+                } else {
+                    await invoke("exit_app");
+                }
+            },
+            "Confirm",
+            true
+        );
+    } catch (err) {
+        console.error("Error during app close handler:", err);
+        await invoke("exit_app");
+    }
+}
+
+let restoredWidth = 1000;
+let restoredHeight = 700;
+
+async function updateRestoredSize() {
+    try {
+        const isMax = await invoke("is_window_maximized");
+        if (!isMax) {
+            const scale = window.devicePixelRatio || 1;
+            restoredWidth = Math.round(window.outerWidth * scale);
+            restoredHeight = Math.round(window.outerHeight * scale);
+        }
+    } catch (err) {
+        console.error("Failed to check maximized state / size:", err);
+    }
+}
+
+window.addEventListener("resize", updateRestoredSize);
+// Call once initially when script loads
+updateRestoredSize();
+
 function setupTitleBar() {
     const minBtn = document.getElementById("titlebar-min");
     const maxBtn = document.getElementById("titlebar-max");
     const closeBtn = document.getElementById("titlebar-close");
+    const titlebar = document.getElementById("custom-titlebar");
+
+    // Double-click to toggle maximize
+    titlebar?.addEventListener("dblclick", async (e) => {
+        if (e.target.closest(".titlebar-actions") || e.target.closest(".titlebar-btn")) {
+            return;
+        }
+        try {
+            await invoke("window_toggle_maximize");
+        } catch (err) {
+            console.error(err);
+        }
+    });
+
+    titlebar?.addEventListener("mousedown", (e) => {
+        // Only trigger on left-click and don't trigger if clicked on buttons
+        if (e.button !== 0) return;
+        if (e.target.closest(".titlebar-actions") || e.target.closest(".titlebar-btn")) {
+            return;
+        }
+
+        const startX = e.screenX;
+        const startY = e.screenY;
+        let isDragging = false;
+
+        const onMouseMove = async (moveEvent) => {
+            const dx = moveEvent.screenX - startX;
+            const dy = moveEvent.screenY - startY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // Drag threshold of 4 physical/logical pixels
+            if (distance > 4 && !isDragging) {
+                isDragging = true;
+                cleanup();
+
+                try {
+                    const scale = window.devicePixelRatio || 1;
+                    await invoke("window_start_drag", {
+                        screenX: Math.round(moveEvent.screenX * scale),
+                        screenY: Math.round(moveEvent.screenY * scale),
+                        restoredWidth: restoredWidth,
+                        restoredHeight: restoredHeight
+                    });
+                } catch (err) {
+                    console.error("Drag start failed:", err);
+                }
+            }
+        };
+
+        const onMouseUp = () => {
+            cleanup();
+        };
+
+        const cleanup = () => {
+            window.removeEventListener("mousemove", onMouseMove);
+            window.removeEventListener("mouseup", onMouseUp);
+        };
+
+        window.addEventListener("mousemove", onMouseMove);
+        window.addEventListener("mouseup", onMouseUp);
+    });
+
     minBtn?.addEventListener("click", async (e) => {
         e.preventDefault();
         try {
@@ -3103,13 +3271,9 @@ function setupTitleBar() {
             console.error(err);
         }
     });
-    closeBtn?.addEventListener("click", async (e) => {
+    closeBtn?.addEventListener("click", (e) => {
         e.preventDefault();
-        try {
-            await invoke("window_close");
-        } catch (err) {
-            console.error(err);
-        }
+        handleAppClose();
     });
 
     // Check for app updates
@@ -3192,6 +3356,10 @@ async function checkAppUpdates() {
 }
 
 function setupPlayer() {
+    const savedVolume = localStorage.getItem("audio-player-volume");
+    if (savedVolume !== null) {
+        volumeBar.value = savedVolume;
+    }
     audioPlayer.volume = Number(volumeBar.value) / 100;
 
     const playerQueueBtn = document.getElementById("player-queue-btn");
@@ -3204,6 +3372,7 @@ function setupPlayer() {
     volumeBar.addEventListener("input", (e) => {
         const val = Number(e.target.value);
         audioPlayer.volume = val / 100;
+        localStorage.setItem("audio-player-volume", val);
         const ssVolBar = document.getElementById("ss-volume-bar");
         if (ssVolBar) {
             ssVolBar.value = val;
@@ -3519,12 +3688,15 @@ function initAudioVisualizer() {
 
         const ctx = vizCanvas.getContext("2d");
 
+        let isDrawing = false;
         function draw() {
-            requestAnimationFrame(draw);
             if (!isPlaying || !analyser) {
                 ctx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+                isDrawing = false;
                 return;
             }
+            isDrawing = true;
+            requestAnimationFrame(draw);
 
             const bufferLength = analyser.frequencyBinCount;
             if (!dataArray || dataArray.length !== bufferLength) {
@@ -3556,6 +3728,15 @@ function initAudioVisualizer() {
                 x += barWidth + 1;
             }
         }
+
+        const startDraw = () => {
+            if (!isDrawing) {
+                draw();
+            }
+        };
+
+        audioPlayer.addEventListener("play", startDraw);
+        audioPlayer.addEventListener("playing", startDraw);
 
         draw();
         visualizerInitialized = true;
@@ -3633,7 +3814,7 @@ function createCustomDragGhost(drag, x, y) {
                 <div style="position: absolute; top: 8px; left: 8px; right: -8px; bottom: -8px; background: rgba(30,30,30,0.2); border: 1px solid rgba(255,255,255,0.04); border-radius: 8px; z-index: -2;"></div>
 
                 <div class="ghost-art" style="width: 32px; height: 32px; border-radius: 4px; overflow: hidden; background: #333; display: flex; align-items: center; justify-content: center; position: relative;">
-                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span style="font-size:10px;">🎵</span>`}
+                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span class="icon-svg icon-music" style="font-size: 14px; background-color: var(--accent);"></span>`}
                     <div style="position: absolute; top: -4px; right: -4px; background: var(--accent, #1db954); color: white; font-size: 9px; font-weight: bold; border-radius: 50%; width: 16px; height: 16px; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 4px rgba(0,0,0,0.3); z-index: 10;">
                         ${count}
                     </div>
@@ -3662,7 +3843,7 @@ function createCustomDragGhost(drag, x, y) {
                 font-size: 13px;
             ">
                 <div class="ghost-art" style="width: 32px; height: 32px; border-radius: 4px; overflow: hidden; background: #333; display: flex; align-items: center; justify-content: center;">
-                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span style="font-size:10px;">🎵</span>`}
+                    ${song.image ? `<img src="${song.image}" style="width: 100%; height: 100%; object-fit: cover;">` : `<span class="icon-svg icon-music" style="font-size: 14px; background-color: var(--accent);"></span>`}
                 </div>
                 <div style="display: flex; flex-direction: column; max-width: 180px;">
                     <span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(song.title)}</span>
@@ -4573,9 +4754,9 @@ async function checkDependencies() {
         if (!res.syncedlyrics) missing.push("syncedlyrics");
 
         if (missing.length > 0) {
-            tipText.innerHTML = `⚠️ Missing dependencies: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--err); font-size: 0.8rem;">${missing.join(", ")}</code>. Run: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--fg); font-family: monospace; font-size: 0.8rem;">pip install spotdl yt-dlp syncedlyrics</code>`;
+            tipText.innerHTML = `<span class="icon-svg icon-plugin" style="background-color: var(--err, #ff5555); margin-right: 6px;"></span> Missing dependencies: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--err); font-size: 0.8rem;">${missing.join(", ")}</code>. Run: <code style="background: var(--bg-hover); padding: 2px 6px; border-radius: 4px; color: var(--fg); font-family: monospace; font-size: 0.8rem;">pip install spotdl yt-dlp syncedlyrics</code>`;
         } else {
-            tipText.innerHTML = `✨ All dependencies are successfully installed and active!`;
+            tipText.innerHTML = `<span class="icon-svg icon-success" style="background-color: var(--accent); margin-right: 6px;"></span> All dependencies are successfully installed and active!`;
         }
     } catch (err) {
         console.error("Dependency check failed:", err);
@@ -4986,7 +5167,7 @@ function appendTrackSearchSection(target, tracks, heading) {
     block.appendChild(list);
     target.appendChild(block);
     const songs = tracks.map(mapSpotifyTrack);
-    renderSongList(songs, list);
+    renderSongList(songs, list, true);
     enrichSongsArt(songs, list);
 }
 
@@ -5207,7 +5388,7 @@ function setupSearch() {
                     list.className = "song-list";
                     block.appendChild(list);
                     searchResultsList.appendChild(block);
-                    renderSongList(section.songs, list);
+                    renderSongList(section.songs, list, true);
                     enrichSongsArt(section.songs, list);
                 }
             }
@@ -5223,7 +5404,7 @@ async function appendArt(parent, song, size) {
     await applyArtToElement(parent, song, size, generateThumbnail);
 }
 
-function createPlayButton(song, tile, queueSongs) {
+function createPlayButton(song, tile, queueSongs, isSearchPlay = false) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "tile-play-btn";
@@ -5231,12 +5412,12 @@ function createPlayButton(song, tile, queueSongs) {
     btn.textContent = "▶";
     btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        selectAndPlaySong(song, tile, queueSongs);
+        selectAndPlaySong(song, tile, queueSongs, isSearchPlay);
     });
     return btn;
 }
 
-async function renderSongGrid(songs, container) {
+async function renderSongGrid(songs, container, isSearch = false) {
     container.innerHTML = "";
     for (const song of songs) {
         const tile = document.createElement("div");
@@ -5252,7 +5433,7 @@ async function renderSongGrid(songs, container) {
         const artDiv = document.createElement("div");
         artDiv.className = "tile-art";
         appendArt(artDiv, song, 300);
-        artDiv.appendChild(createPlayButton(song, tile, songs));
+        artDiv.appendChild(createPlayButton(song, tile, songs, isSearch));
 
         const titleSpan = document.createElement("span");
         titleSpan.className = "tile-title";
@@ -5283,7 +5464,7 @@ async function renderSongGrid(songs, container) {
                 e.target.closest("a")
             )
                 return;
-            selectAndPlaySong(song, tile, songs);
+            selectAndPlaySong(song, tile, songs, isSearch);
         });
 
         tile.addEventListener("contextmenu", (e) => {
@@ -5393,7 +5574,7 @@ async function enrichAlbumsArt(albums, container) {
     );
 }
 
-async function renderSongList(songs, container) {
+async function renderSongList(songs, container, isSearch = false) {
     container.innerHTML = "";
     for (const song of songs) {
         const el = document.createElement("div");
@@ -5410,7 +5591,7 @@ async function renderSongList(songs, container) {
         artDiv.className = "item-art";
         artDiv.style.position = "relative";
         await appendArt(artDiv, song, 80);
-        const playBtn = createPlayButton(song, el, songs);
+        const playBtn = createPlayButton(song, el, songs, isSearch);
         // Style adjustments for the play button in list view
         playBtn.style.right = "4px";
         playBtn.style.bottom = "4px";
@@ -5452,7 +5633,7 @@ async function renderSongList(songs, container) {
                 e.target.closest("a")
             )
                 return;
-            selectAndPlaySong(song, el, songs);
+            selectAndPlaySong(song, el, songs, isSearch);
         });
 
         el.addEventListener("contextmenu", (e) => {
@@ -5526,9 +5707,62 @@ async function selectSong(song, element) {
     setSingleSongSelection(song, element, selectionKey);
 }
 
-async function selectAndPlaySong(song, element, queueSongs = null) {
+async function populateQueueForArtistRadio(song) {
+    if (!song || !song.artist) return;
+    try {
+        console.log(`[Autoplay Radio] Populating queue for artist: "${song.artist}"`);
+        const raw = await cachedInvoke("fetch_lastfm", {
+            method: "artist.getTopTracks",
+            extraParams: `&artist=${encodeURIComponent(song.artist)}&limit=25`,
+        });
+        const data = JSON.parse(raw);
+        if (data.toptracks && data.toptracks.track) {
+            const tracks = data.toptracks.track;
+            if (Array.isArray(tracks) && tracks.length > 0) {
+                const artistTracks = tracks.map((t) => {
+                    const images = parseImagesFromLastFm(t.image);
+                    const artistName = typeof t.artist === "object" ? t.artist.name : t.artist || "";
+                    return {
+                        title: t.name,
+                        artist: artistName,
+                        album: null,
+                        image: pickBestImageUrl(images) || null,
+                        duration: t.duration ? Number(t.duration) : null,
+                        spotify_url: null,
+                    };
+                });
+                
+                const currentTitleLower = song.title.toLowerCase();
+                const filtered = artistTracks.filter(t => {
+                    const titleLower = (t.title || "").toLowerCase();
+                    if (titleLower === currentTitleLower) return false;
+                    if (titleLower.includes(currentTitleLower) || currentTitleLower.includes(titleLower)) return false;
+                    return true;
+                });
+                
+                const tracksToQueue = filtered.slice(0, 10);
+                if (tracksToQueue.length > 0) {
+                    appQueue.push(...tracksToQueue);
+                    renderQueueUI();
+                    console.log(`[Autoplay Radio] Appended ${tracksToQueue.length} tracks by "${song.artist}"`);
+                }
+            }
+        }
+    } catch (err) {
+        console.warn("[Autoplay Radio] Failed to fetch artist top tracks:", err);
+    }
+}
+
+async function selectAndPlaySong(song, element, queueSongs = null, isSearchPlay = false) {
     await selectSong(song, element);
-    const list = resolvePlaybackQueueForSong(song, queueSongs);
+    
+    const isSearchActive = isSearchPlay || (views.search && !views.search.classList.contains("hidden"));
+    
+    let list = resolvePlaybackQueueForSong(song, queueSongs);
+    if (isSearchActive) {
+        list = [song];
+    }
+    
     if (list?.length) {
         setPlaybackQueue(list, song);
     } else if (!appQueue.length) {
@@ -5537,6 +5771,10 @@ async function selectAndPlaySong(song, element, queueSongs = null) {
         syncQueueIndexForSong(song);
     }
     await playSong(song);
+    
+    if (isSearchActive) {
+        populateQueueForArtistRadio(song).catch(console.error);
+    }
 }
 
 function getMetadataSkeletonHTML() {
@@ -6125,8 +6363,7 @@ async function downloadSongWithMetadata(song) {
             throw new Error("Cancelled");
         }
         setSongDownloadActivity(song, "Downloading audio");
-        const query = `${song.title} ${song.artist}`;
-        const streamInfo = await invoke("stream_song", { query });
+        const streamInfo = await invoke("stream_song", streamSongInvokeArgs(song, true));
 
         if (cancelledDownloads.has(key)) {
             throw new Error("Cancelled");
@@ -6164,7 +6401,7 @@ async function downloadSongWithMetadata(song) {
             isStorageErr ? "Storage folder problem" : "Download Failed",
             isStorageErr
                 ? `<p style="margin-bottom: 0.8rem;">${escapeHtml(errText)}</p>
-                   <p style="color: var(--fg-muted); font-size: 0.92rem;">Use <strong>Downloads</strong> or <strong>Settings</strong> to pick a valid folder with Browse (📁).</p>`
+                   <p style="color: var(--fg-muted); font-size: 0.92rem; display: flex; align-items: center; gap: 4px; justify-content: center;">Use <strong>Downloads</strong> or <strong>Settings</strong> to pick a valid folder with Browse (<span class="icon-svg icon-folder" style="background-color: var(--accent);"></span>).</p>`
                 : `<p style="margin-bottom: 0.8rem; font-size: 1.05rem;">Could not download <strong>${escapeHtml(song.title)}</strong> by <strong>${escapeHtml(song.artist)}</strong>.</p>
              <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45; margin-bottom: 0.5rem;">
                 This error typically occurs when the song/audio source <strong>cannot be found on YouTube</strong>, or when the video is blocked/restricted.
@@ -8156,6 +8393,7 @@ function initScreensaverEvents() {
         ssVolBar.addEventListener("input", (e) => {
             const val = Number(e.target.value);
             audioPlayer.volume = val / 100;
+            localStorage.setItem("audio-player-volume", val);
             volumeBar.value = val; // Synchronize with the main volume bar
         });
         ssVolBar.addEventListener("click", (e) => {
@@ -8325,10 +8563,17 @@ window.spotiTauri = {
         const downloadsStr =
             downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
 
+        let iconHtml = "";
+        if (!meta.icon || meta.icon === "🔌") {
+            iconHtml = `<span class="icon-svg icon-plugin" style="font-size: 1.8rem; background-color: var(--accent);"></span>`;
+        } else {
+            iconHtml = `<span style="font-size: 1.8rem;">${meta.icon}</span>`;
+        }
+
         card.innerHTML = `
-            <div style="position: absolute; top: 0; left: 0; width: 100%; height: 4px; background: linear-gradient(90deg, #1db954, #8bc34a);"></div>
+            <div style="position: absolute; top: 0; left: 0; width: 100%; height: 4px; background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, white));"></div>
             <div style="display: flex; align-items: center; justify-content: space-between;">
-                <span style="font-size: 1.8rem;">${icon}</span>
+                ${iconHtml}
                 <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
                     <span style="background: rgba(29, 185, 84, 0.15); color: #1db954; font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
                         ${downloadsStr} downloads
@@ -8456,9 +8701,16 @@ async function fetchMarketplacePlugins() {
                     ? `${(downloads / 1000).toFixed(1)}k`
                     : downloads;
 
+            let iconHtml = "";
+            if (!pluginMeta.icon || pluginMeta.icon === "🔌") {
+                iconHtml = `<span class="icon-svg icon-plugin" style="font-size: 1.8rem; background-color: var(--accent);"></span>`;
+            } else {
+                iconHtml = `<span style="font-size: 1.8rem;">${pluginMeta.icon}</span>`;
+            }
+
             card.innerHTML = `
                 <div style="display: flex; align-items: center; justify-content: space-between;">
-                    <span style="font-size: 1.8rem;">${icon}</span>
+                    ${iconHtml}
                     <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
                         <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
                             ${downloadsStr} downloads

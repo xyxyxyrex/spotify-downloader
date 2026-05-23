@@ -3099,7 +3099,7 @@ h2 {
     margin-bottom: 24px;
 }
 
-.modal-body input,
+.modal-body input:not([type="radio"]):not([type="checkbox"]),
 .modal-body select {
     width: 100%;
     padding: 10px 14px;
@@ -4427,7 +4427,7 @@ body.dragging-active #playlist-list li * {
     }
 }
 
-/* --- Plugin Store & Spotify Wrapped Immersive Styling --- */
+/* --- Plugin Store & Stats & Fate Immersive Styling --- */
 .plugin-card:hover {
     transform: translateY(-5px);
     border-color: rgba(29, 185, 84, 0.4) !important;
@@ -4441,7 +4441,7 @@ body.dragging-active #playlist-list li * {
 }
 
 /* ============================================================
-   SPOTIFY WRAPPED v2 — GSAP-Powered Immersive Experience
+   STATS & FATE v2 — GSAP-Powered Immersive Experience
    ============================================================ */
 
 /* Overlay backdrop */
@@ -5534,4 +5534,59 @@ body.dragging-active #playlist-list li * {
 /* Hide legacy text heart since we have the premium thumbnail */
 #playlist-list li.pl-liked .pl-label::before {
     display: none !important;
+}
+
+/* Premium Themeable SVG Icons */
+.icon-svg {
+    display: inline-block;
+    width: 1.1em;
+    height: 1.1em;
+    background-color: currentColor;
+    mask-size: contain;
+    mask-repeat: no-repeat;
+    mask-position: center;
+    -webkit-mask-size: contain;
+    -webkit-mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+    vertical-align: middle;
+}
+.icon-success {
+    mask-image: url("assets/svg/success-filled-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/success-filled-svgrepo-com.svg");
+}
+.icon-gift {
+    mask-image: url("assets/svg/stats-fate.svg");
+    -webkit-mask-image: url("assets/svg/stats-fate.svg");
+}
+.icon-tarot {
+    mask-image: url("assets/svg/tarot-card-2-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/tarot-card-2-svgrepo-com.svg");
+}
+.icon-store {
+    mask-image: url("assets/svg/store-1-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/store-1-svgrepo-com.svg");
+}
+.icon-folder {
+    mask-image: url("assets/svg/folder-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/folder-svgrepo-com.svg");
+}
+.icon-music {
+    mask-image: url("assets/svg/musical-note-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/musical-note-svgrepo-com.svg");
+}
+.icon-plugin {
+    mask-image: url("assets/svg/plugin-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/plugin-svgrepo-com.svg");
+}
+.icon-history {
+    mask-image: url("assets/svg/history-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/history-svgrepo-com.svg");
+}
+.icon-headphones {
+    mask-image: url("assets/svg/headphones-square-sound-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/headphones-square-sound-svgrepo-com.svg");
+}
+.icon-save {
+    mask-image: url("assets/svg/save-floppy-svgrepo-com.svg");
+    -webkit-mask-image: url("assets/svg/save-floppy-svgrepo-com.svg");
 }

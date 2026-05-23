@@ -105,8 +105,8 @@ function launchHistoryStats() {
                     line-height: 1;
                 ">&times;</button>
                 
-                <h2 style="font-size: 1.5rem; font-weight: 800; margin: 0 0 20px 0; color: #1db954; display: flex; align-items: center; gap: 10px;">
-                    📊 History Insights
+                <h2 style="font-size: 1.5rem; font-weight: 800; margin: 0 0 20px 0; color: var(--accent); display: flex; align-items: center; gap: 10px;">
+                    <span class="icon-svg icon-history" style="background-color: var(--accent);"></span> History Insights
                 </h2>
                 
                 <div style="display: flex; flex-direction: column; gap: 18px;">
@@ -150,7 +150,7 @@ if (window.spotiTauri && typeof window.spotiTauri.registerPlugin === "function")
         id: "history-stats",
         name: "History Insights",
         description: "Analyze your local play count metrics, favorite artists, and aggregate listening duration.",
-        icon: "📊",
+        icon: "<span class=\"icon-svg icon-history\" style=\"background-color: var(--accent);\"></span>",
         lastUpdated: "20-May-2026",
         downloads: 850,
         launch: launchHistoryStats

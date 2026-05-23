@@ -1,6 +1,8 @@
 // =============================================================
-// --- Spotify Wrapped v2 — GSAP-Powered Immersive Engine ---
+// --- Stats & Fate v2 — GSAP-Powered Immersive Engine ---
 // =============================================================
+
+import { TAROT_PROFILES, evaluateUnlockedCards } from "./tarot-profiles.js";
 
 const { invoke } = window.__TAURI__.core;
 
@@ -282,8 +284,8 @@ function morphMeshBg(index) {
 function buildSlide0(greet) {
     return `<div class="wrapped-slide" style="justify-content:center; text-align:center; align-items:center;">
         <div style="display:flex; flex-direction:column; align-items:center; gap:18px;">
-            <div class="w-float-icon" style="font-size:3.5rem;">🎧</div>
-            <h1 class="w-heading" style="font-size:2.4rem; background:linear-gradient(135deg,#1db954,#00bcd4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">Your Sound,<br>Unlocked.</h1>
+            <div class="w-float-icon icon-svg icon-headphones" style="font-size:3.5rem; background-color: var(--accent);"></div>
+            <h1 class="w-heading" style="font-size:2.4rem; background:linear-gradient(135deg,var(--accent),#00bcd4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">Your Sound,<br>Unlocked.</h1>
             <p class="w-subtext" style="max-width:260px;">${greet}. Let's explore 10 chapters of your listening story.</p>
             <div class="w-hint" style="margin-top:20px;">
                 <span>Tap to begin</span>
@@ -395,16 +397,22 @@ function buildSlide6(hoursListened, minutesListened) {
     </div>`;
 }
 
-function buildSlide7(personality, personalityDesc) {
+function buildSlide7(unlockedCount, unlockedCards) {
+    const cardsToShow = unlockedCards.slice(0, 3).map(c => `<span style="background:rgba(110, 94, 172, 0.25); border:1px solid var(--accent); color:var(--accent); font-family:monospace; padding:4px 8px; border-radius:4px; font-size:0.75rem;">${escapeHtml(c.name)}</span>`).join(" ");
+    
     return `<div class="wrapped-slide" style="justify-content:center; text-align:center; align-items:center;">
-        <div style="display:flex; flex-direction:column; align-items:center; gap:10px; width:100%;">
-            <span class="w-label" style="color:#00bcd4;">Audio Identity</span>
-            <h2 class="w-heading" style="margin-bottom:8px;">Your Listening DNA</h2>
-            <div class="personality-badge" style="width:100%; box-sizing:border-box;">
-                <div style="font-size:2.2rem; margin-bottom:8px; position:relative; z-index:1;">🎭</div>
-                <div class="personality-title" style="color:#fff;">${personality}</div>
-                <p class="personality-desc">${personalityDesc}</p>
+        <div style="display:flex; flex-direction:column; align-items:center; gap:12px; width:100%;">
+            <span class="w-label" style="color:var(--accent);">Fate Unlocked</span>
+            <h2 class="w-heading" style="margin-bottom:6px; font-size:1.6rem; background:linear-gradient(135deg,var(--accent),#6e5eac); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">Your Tarot Quests</h2>
+            <div class="personality-badge" style="width:100%; box-sizing:border-box; border: 2px dashed #4a3e7a; background:rgba(0,0,0,0.2); padding:16px;">
+                <div class="icon-svg icon-tarot" style="font-size:2.4rem; margin-bottom:6px; position:relative; z-index:1; animation: wrapped-badge-spin 12s linear infinite; background-color: var(--accent);"></div>
+                <div class="personality-title" style="color:#fff; font-size:1.8rem; font-family:monospace;">${unlockedCount} / 22</div>
+                <p style="color:#8be9fd; font-size:0.8rem; margin:4px 0 10px 0; font-family:monospace;">Cards Collected</p>
+                <div style="display:flex; justify-content:center; gap:6px; flex-wrap:wrap; margin-top:8px;">
+                    ${cardsToShow || '<span style="color:#6272a4; font-size:0.8rem;">No cards unlocked yet...</span>'}
+                </div>
             </div>
+            <p class="w-subtext" style="font-size:0.75rem; max-width:240px; margin-top:4px;">Each card represents a listening quest. View your full collection in the <strong>Fate Book</strong>!</p>
         </div>
     </div>`;
 }
@@ -429,7 +437,7 @@ function buildSlide8(uniqueTracks, artistCount) {
     </div>`;
 }
 
-function buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTracks, personality, isMockData, defaultImg) {
+function buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTracks, unlockedCount, isMockData, defaultImg) {
     const trackTitle = topTrack ? topTrack.title : "—";
     const trackArtist = topTrack ? topTrack.artist : "—";
     const trackImg = topTrack ? (topTrack.image || defaultImg) : defaultImg;
@@ -456,13 +464,17 @@ function buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTr
                 </div>
                 <div class="w-summary-row">
                     <div style="flex:1;">
-                        <div class="w-summary-label">Personality</div>
-                        <div class="w-summary-value" style="font-size:0.82rem; background:linear-gradient(90deg,#1db954,#00bcd4); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">${personality}</div>
+                        <div class="w-summary-label">Fate Book Collection</div>
+                        <div class="w-summary-value" style="font-size:0.88rem; font-family:monospace; color:#ffb86c;">${unlockedCount} / 22 Cards</div>
                     </div>
                 </div>
             </div>
-            <p style="text-align:center; font-size:0.72rem; color:rgba(255,255,255,0.3); margin:4px 0 0 0;">${isMockData ? "⚠️ Simulated profile — listen more!" : "🎉 From your local play logs"}</p>
-            <button type="button" class="w-save-btn" onclick="alert('Wrapped card saved!')">💾 Save Wrapped Card</button>
+            <p style="text-align:center; font-size:0.72rem; color:rgba(255,255,255,0.3); margin:4px 0 0 0; display:flex; align-items:center; gap:4px; justify-content:center;">
+                ${isMockData 
+                    ? `<span class="icon-svg icon-plugin" style="background-color: var(--err, #ff5555); font-size: 0.75rem; vertical-align: middle;"></span> Simulated profile — listen more!` 
+                    : `<span class="icon-svg icon-success" style="background-color: var(--accent); font-size: 0.75rem; vertical-align: middle;"></span> From your local play logs`}
+            </p>
+            <button type="button" class="w-save-btn" onclick="alert('Wrapped card saved!')"><span class="icon-svg icon-save" style="margin-right: 6px;"></span> Save Wrapped Card</button>
         </div>
     </div>`;
 }
@@ -612,14 +624,149 @@ const SLIDE_ANIMATORS = [
     animateSlide5, animateSlide6, animateSlide7, animateSlide8, animateSlide9,
 ];
 
+async function checkPlayHistoryAndPrompt() {
+    let historyData = null;
+    try {
+        historyData = await invoke("get_history");
+    } catch (e) {
+        console.error(e);
+    }
+    
+    let hasHistory = false;
+    if (historyData) {
+        for (const id in historyData) {
+            const item = historyData[id];
+            if (item && item.play_timestamps && item.play_timestamps.length > 0) {
+                hasHistory = true;
+                break;
+            }
+        }
+    }
+    
+    if (hasHistory) {
+        return true;
+    }
+    
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.id = "wrapped-history-prompt";
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(8, 6, 16, 0.85);
+            backdrop-filter: blur(15px);
+            -webkit-backdrop-filter: blur(15px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 99999;
+            font-family: inherit;
+            color: var(--fg, #e0e0e0);
+        `;
+        
+        const card = document.createElement("div");
+        card.style.cssText = `
+            background: var(--bg-card, #1e1e1e);
+            border: 2px solid var(--accent, #1db954);
+            border-radius: 16px;
+            padding: 30px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            text-align: center;
+            box-sizing: border-box;
+            position: relative;
+        `;
+        
+        card.innerHTML = `
+            <div style="font-size: 3.5rem; margin-bottom: 5px; animation: pulse 2s infinite;">🔮</div>
+            <h2 style="margin: 0; color: var(--accent, #1db954); font-size: 1.6rem; text-transform: uppercase; letter-spacing: 1px;">Your Music Fate Awaits</h2>
+            <p style="margin: 0; font-size: 0.9rem; line-height: 1.6; color: var(--fg-muted, #a0a0a0);">
+                You haven't played any tracks yet! Stats & Fate and the Fate Book analyze your listening history to unlock tarot cards and compile your audio story.
+            </p>
+            <div style="display: flex; flex-direction: column; gap: 10px; margin-top: 10px;">
+                <button id="prompt-btn-listen" style="
+                    background: var(--accent, #1db954);
+                    color: #000;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 12px;
+                    font-size: 0.95rem;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: transform 0.2s, background-color 0.2s;
+                ">Start Listening</button>
+                <button id="prompt-btn-demo" style="
+                    background: rgba(255, 255, 255, 0.05);
+                    color: var(--fg, #e0e0e0);
+                    border: 1px solid rgba(255, 255, 255, 0.15);
+                    border-radius: 8px;
+                    padding: 12px;
+                    font-size: 0.95rem;
+                    font-weight: bold;
+                    cursor: pointer;
+                    transition: transform 0.2s, background-color 0.2s;
+                ">Explore with Demo Data</button>
+                <button id="prompt-btn-cancel" style="
+                    background: transparent;
+                    color: var(--fg-muted, #a0a0a0);
+                    border: none;
+                    cursor: pointer;
+                    font-size: 0.85rem;
+                    margin-top: 5px;
+                ">Cancel</button>
+            </div>
+        `;
+        
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+        
+        const btnListen = card.querySelector("#prompt-btn-listen");
+        const btnDemo = card.querySelector("#prompt-btn-demo");
+        const btnCancel = card.querySelector("#prompt-btn-cancel");
+        
+        btnListen.onmouseover = () => { btnListen.style.transform = "scale(1.03)"; btnListen.style.backgroundColor = "color-mix(in srgb, var(--accent) 85%, white)"; };
+        btnListen.onmouseout = () => { btnListen.style.transform = "scale(1.0)"; btnListen.style.backgroundColor = "var(--accent)"; };
+        
+        btnDemo.onmouseover = () => { btnDemo.style.transform = "scale(1.03)"; btnDemo.style.backgroundColor = "rgba(255, 255, 255, 0.1)"; };
+        btnDemo.onmouseout = () => { btnDemo.style.transform = "scale(1.0)"; btnDemo.style.backgroundColor = "rgba(255, 255, 255, 0.05)"; };
+        
+        btnListen.onclick = () => {
+            overlay.remove();
+            if (typeof window.switchView === "function") {
+                window.switchView("search");
+                const searchInput = document.getElementById("search-input");
+                if (searchInput) searchInput.focus();
+            }
+            resolve(false);
+        };
+        
+        btnDemo.onclick = () => {
+            overlay.remove();
+            resolve(true);
+        };
+        
+        btnCancel.onclick = () => {
+            overlay.remove();
+            resolve(false);
+        };
+    });
+}
+
 // ---- Main Launch Function ----
-async function launchSpotifyWrapped() {
+async function launchStatsAndFate() {
     const launchWrappedBtn = document.getElementById("btn-launch-wrapped");
-    let originalText = "Launch Wrapped";
+    let originalText = "Launch Stats & Fate";
     if (launchWrappedBtn) {
         originalText = launchWrappedBtn.textContent;
         launchWrappedBtn.disabled = true;
-        launchWrappedBtn.textContent = "Preparing audio story... 🎧";
+        launchWrappedBtn.innerHTML = 'Preparing audio story... <span class="icon-svg icon-headphones" style="background-color: var(--accent); font-size: 0.9rem; margin-left: 4px;"></span>';
         launchWrappedBtn.style.opacity = "0.7";
     }
 
@@ -642,6 +789,15 @@ async function launchSpotifyWrapped() {
     // 2. Fallback mock data
     let isMockData = false;
     if (historyList.length === 0) {
+        const launchDemo = await checkPlayHistoryAndPrompt();
+        if (!launchDemo) {
+            if (launchWrappedBtn) {
+                launchWrappedBtn.disabled = false;
+                launchWrappedBtn.innerHTML = originalText;
+                launchWrappedBtn.style.opacity = "1";
+            }
+            return;
+        }
         isMockData = true;
         historyList = [
             { title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", duration_secs: 200, play_timestamps: [1716180000, 1716183600, 1716187200, 1716190800, 1716194400, 1716198000, 1716201600, 1716205200, 1716208800, 1716212400, 1716216000, 1716219600], image: "" },
@@ -684,15 +840,86 @@ async function launchSpotifyWrapped() {
     const minutesListened = Math.round(totalDurationSecs / 60);
     const hoursListened = (totalDurationSecs / 3600).toFixed(1);
 
-    let personality = "THE SONIC VOYAGER";
-    let personalityDesc = "You love charting new paths, mapping rare songs and sailing through massive soundscapes.";
-    if (uniqueTracks > 0 && (totalPlays / uniqueTracks) > 4) {
-        personality = "THE DEVOTED LOYALIST";
-        personalityDesc = "When you love a track, you loop it into core memory. Your anthems run on repeat day and night.";
-    } else if (uniqueTracks > 15) {
-        personality = "THE ECLECTIC TASTEMAKER";
-        personalityDesc = "A chameleon of sound — blending underground gems with mainstream anthems into the ultimate curated archive.";
+    // Calculate time slots and track duration stats
+    let morningPlays = 0, afternoonPlays = 0, eveningPlays = 0, nightPlays = 0;
+    let trackDurations = [];
+
+    historyList.forEach((track) => {
+        const count = track.play_timestamps.length;
+        const dur = track.duration_secs || track.duration || 210;
+        for (let i = 0; i < count; i++) {
+            trackDurations.push(dur);
+        }
+        track.play_timestamps.forEach((ts) => {
+            const date = new Date(ts * 1000);
+            const hr = date.getHours();
+            if (hr >= 6 && hr < 12) morningPlays++;
+            else if (hr >= 12 && hr < 18) afternoonPlays++;
+            else if (hr >= 18 && hr < 24) eveningPlays++;
+            else nightPlays++;
+        });
+    });
+
+    const averageTrackDuration = trackDurations.length > 0 ? (trackDurations.reduce((a,b) => a+b, 0) / trackDurations.length) : 0;
+    
+    let durationVarianceScore = 0;
+    if (trackDurations.length > 1) {
+        const variance = trackDurations.reduce((acc, d) => acc + Math.pow(d - averageTrackDuration, 2), 0) / trackDurations.length;
+        const stdDev = Math.sqrt(variance);
+        durationVarianceScore = Math.min(100, Math.round((stdDev / 120) * 100));
     }
+
+    const oldestTrackId = oldestListen?.track?.id;
+    const firstTrackPlayedCount = oldestTrackId ? (historyList.find(t => t.id === oldestTrackId)?.play_timestamps.length || 0) : 0;
+
+    let tasteShiftDetected = false;
+    let flatPlays = [];
+    historyList.forEach(track => {
+        track.play_timestamps.forEach(ts => {
+            flatPlays.push({ artist: track.artist, ts });
+        });
+    });
+    if (flatPlays.length >= 8) {
+        flatPlays.sort((a, b) => a.ts - b.ts);
+        const mid = Math.floor(flatPlays.length / 2);
+        const firstHalf = flatPlays.slice(0, mid);
+        const secondHalf = flatPlays.slice(mid);
+
+        const firstHalfMap = new Map();
+        firstHalf.forEach(p => firstHalfMap.set(p.artist, (firstHalfMap.get(p.artist) || 0) + 1));
+        const firstHalfTop = [...firstHalfMap.entries()].sort((a,b) => b[1] - a[1])[0]?.[0];
+
+        const secondHalfMap = new Map();
+        secondHalf.forEach(p => secondHalfMap.set(p.artist, (secondHalfMap.get(p.artist) || 0) + 1));
+        const secondHalfTop = [...secondHalfMap.entries()].sort((a,b) => b[1] - a[1])[0]?.[0];
+
+        if (firstHalfTop && secondHalfTop && firstHalfTop !== secondHalfTop) {
+            tasteShiftDetected = true;
+        }
+    }
+
+    const stats = {
+        totalPlays,
+        uniqueTracks,
+        uniqueArtists: artistMap.size,
+        ratio: uniqueTracks > 0 ? (totalPlays / uniqueTracks) : 0,
+        topTrackCount,
+        topArtistPlays: topArtists[0] ? topArtists[0][1] : 0,
+        secondArtistPlays: topArtists[1] ? topArtists[1][1] : 0,
+        hoursListened: parseFloat(hoursListened),
+        minutesListened,
+        averageTrackDuration,
+        morningPlays,
+        afternoonPlays,
+        eveningPlays,
+        nightPlays,
+        firstTrackPlayedCount,
+        tasteShiftDetected,
+        durationVarianceScore
+    };
+
+    const { unlockedCards: unlockedCardsData } = evaluateUnlockedCards(stats);
+    const unlockedIds = unlockedCardsData.map(c => c.id);
 
     const hour = new Date().getHours();
     let greet = "Good evening";
@@ -733,9 +960,9 @@ async function launchSpotifyWrapped() {
         buildSlide4(topArtists),
         buildSlide5(genres),
         buildSlide6(hoursListened, minutesListened),
-        buildSlide7(personality, personalityDesc),
+        buildSlide7(unlockedIds.length, unlockedCardsData),
         buildSlide8(uniqueTracks, artistMap.size),
-        buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTracks, personality, isMockData, defaultImg),
+        buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTracks, unlockedIds.length, isMockData, defaultImg),
     ];
     slidesContainer.innerHTML = slidesHTML.join("");
 
@@ -1023,7 +1250,7 @@ async function exportWrappedSlidesToZip() {
             bytes: Array.from(zipContent)
         });
         
-        alert("Wrapped slides exported successfully! 🎉");
+        alert("Wrapped slides exported successfully!");
     } catch (err) {
         console.error("Failed to export slides:", err);
         alert(`Failed to export slides to ZIP: ${err.message}`);
@@ -1080,9 +1307,9 @@ function initWrappedOverlayEvents() {
     if (shareBtn) {
         shareBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            const shareText = `🎧 My Spoti-Tauri Wrapped is here! ${wrappedSlideIndex + 1}/10 chapters of my listening story unlocked. Check it out!`;
+            const shareText = `🎧 My Spoti-Tauri Stats & Fate is here! ${wrappedSlideIndex + 1}/10 chapters of my listening story unlocked. Check it out!`;
             navigator.clipboard.writeText(shareText).then(() => {
-                alert("Wrapped summary copied to clipboard! 🎉");
+                alert("Stats & Fate summary copied to clipboard!");
             }).catch(err => {
                 console.error("Clipboard error:", err);
                 alert("Copied: " + shareText);
@@ -1099,18 +1326,400 @@ function initWrappedOverlayEvents() {
     });
 }
 
-// Bind to launch button and initialize
-const launchWrappedBtn = document.getElementById("btn-launch-wrapped");
-if (launchWrappedBtn) {
-    launchWrappedBtn.addEventListener("click", (e) => {
-        e.preventDefault();
-        launchSpotifyWrapped();
-    });
-}
-
 // Initialize when DOM is ready
 if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", initWrappedOverlayEvents);
 } else {
     initWrappedOverlayEvents();
 }
+
+// Global delegated click listener for Stats & Fate action buttons
+document.addEventListener("click", (e) => {
+    try {
+        const tarotBtn = e.target.closest("#btn-view-tarot-collection");
+        if (tarotBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log("[Fate Book] Click detected on #btn-view-tarot-collection");
+            openTarotCollection().catch(err => {
+                alert("[Fate Book Click Catch] Error: " + (err.stack || err));
+            });
+            return;
+        }
+
+        const launchBtn = e.target.closest("#btn-launch-wrapped");
+        if (launchBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log("[Stats & Fate] Click detected on #btn-launch-wrapped");
+            launchStatsAndFate().catch(err => {
+                alert("[Launch Stats & Fate Catch] Error: " + (err.stack || err));
+            });
+        }
+    } catch (err) {
+        alert("[Delegated Click Error] " + (err.stack || err));
+    }
+});
+
+// ---- Tarot Card Collection (Fate Book) Logic ----
+
+async function getTarotStats() {
+    let historyList = [];
+    try {
+        const historyData = await invoke("get_history");
+        if (historyData) {
+            for (const id in historyData) {
+                const item = historyData[id];
+                if (item && item.play_timestamps && item.play_timestamps.length > 0) {
+                    historyList.push(item);
+                }
+            }
+        }
+    } catch (e) {
+        console.error("Failed to fetch play history for Tarot:", e);
+    }
+
+    // Fallback mock data if empty (just to show cards in empty states)
+    if (historyList.length === 0) {
+        historyList = [
+            { id: "mock1", title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", duration_secs: 200, play_timestamps: [1716180000, 1716183600, 1716187200], image: "" },
+            { id: "mock2", title: "Starboy", artist: "The Weeknd", album: "Starboy", duration_secs: 230, play_timestamps: [1716180000], image: "" }
+        ];
+    }
+
+    // Compute basic metrics
+    let totalPlays = 0, uniqueTracks = historyList.length, artistMap = new Map(), playCountsMap = [], oldestListen = null, totalDurationSecs = 0;
+
+    historyList.forEach((track) => {
+        const count = track.play_timestamps.length;
+        totalPlays += count;
+        totalDurationSecs += count * (track.duration_secs || 210);
+        artistMap.set(track.artist, (artistMap.get(track.artist) || 0) + count);
+        playCountsMap.push({ track, count });
+        const earliestTime = Math.min(...track.play_timestamps);
+        if (oldestListen === null || earliestTime < oldestListen.time) {
+            oldestListen = { track, time: earliestTime };
+        }
+    });
+
+    playCountsMap.sort((a, b) => b.count - a.count);
+    const topTrack = playCountsMap[0]?.track || null;
+    const topTrackCount = playCountsMap[0]?.count || 0;
+    const sortedArtists = [...artistMap.entries()].sort((a, b) => b[1] - a[1]);
+    const topArtists = sortedArtists.slice(0, 5);
+    const minutesListened = Math.round(totalDurationSecs / 60);
+    const hoursListened = (totalDurationSecs / 3600).toFixed(1);
+
+    // Compute time slots
+    let morningPlays = 0, afternoonPlays = 0, eveningPlays = 0, nightPlays = 0;
+    let trackDurations = [];
+
+    historyList.forEach((track) => {
+        const count = track.play_timestamps.length;
+        const dur = track.duration_secs || track.duration || 210;
+        for (let i = 0; i < count; i++) {
+            trackDurations.push(dur);
+        }
+        track.play_timestamps.forEach((ts) => {
+            const date = new Date(ts * 1000);
+            const hour = date.getHours();
+            if (hour >= 6 && hour < 12) morningPlays++;
+            else if (hour >= 12 && hour < 18) afternoonPlays++;
+            else if (hour >= 18 && hour < 24) eveningPlays++;
+            else nightPlays++;
+        });
+    });
+
+    const averageTrackDuration = trackDurations.length > 0 ? (trackDurations.reduce((a,b) => a+b, 0) / trackDurations.length) : 0;
+    
+    let durationVarianceScore = 0;
+    if (trackDurations.length > 1) {
+        const variance = trackDurations.reduce((acc, d) => acc + Math.pow(d - averageTrackDuration, 2), 0) / trackDurations.length;
+        const stdDev = Math.sqrt(variance);
+        durationVarianceScore = Math.min(100, Math.round((stdDev / 120) * 100));
+    }
+
+    const oldestTrackId = oldestListen?.track?.id;
+    const firstTrackPlayedCount = oldestTrackId ? (historyList.find(t => t.id === oldestTrackId)?.play_timestamps.length || 0) : 0;
+
+    let tasteShiftDetected = false;
+    let flatPlays = [];
+    historyList.forEach(track => {
+        track.play_timestamps.forEach(ts => {
+            flatPlays.push({ artist: track.artist, ts });
+        });
+    });
+    if (flatPlays.length >= 8) {
+        flatPlays.sort((a, b) => a.ts - b.ts);
+        const mid = Math.floor(flatPlays.length / 2);
+        const firstHalf = flatPlays.slice(0, mid);
+        const secondHalf = flatPlays.slice(mid);
+
+        const firstHalfMap = new Map();
+        firstHalf.forEach(p => firstHalfMap.set(p.artist, (firstHalfMap.get(p.artist) || 0) + 1));
+        const firstHalfTop = [...firstHalfMap.entries()].sort((a,b) => b[1] - a[1])[0]?.[0];
+
+        const secondHalfMap = new Map();
+        secondHalf.forEach(p => secondHalfMap.set(p.artist, (secondHalfMap.get(p.artist) || 0) + 1));
+        const secondHalfTop = [...secondHalfMap.entries()].sort((a,b) => b[1] - a[1])[0]?.[0];
+
+        if (firstHalfTop && secondHalfTop && firstHalfTop !== secondHalfTop) {
+            tasteShiftDetected = true;
+        }
+    }
+
+    return {
+        totalPlays,
+        uniqueTracks,
+        uniqueArtists: artistMap.size,
+        ratio: uniqueTracks > 0 ? (totalPlays / uniqueTracks) : 0,
+        topTrackCount,
+        topArtistPlays: topArtists[0] ? topArtists[0][1] : 0,
+        secondArtistPlays: topArtists[1] ? topArtists[1][1] : 0,
+        hoursListened: parseFloat(hoursListened),
+        minutesListened,
+        averageTrackDuration,
+        morningPlays,
+        afternoonPlays,
+        eveningPlays,
+        nightPlays,
+        firstTrackPlayedCount,
+        tasteShiftDetected,
+        durationVarianceScore
+    };
+}
+
+async function openTarotCollection() {
+    try {
+        console.log("[Fate Book] openTarotCollection starting");
+        const modal = document.getElementById("tarot-collection-modal");
+        if (!modal) {
+            alert("[Fate Book Error] Element 'tarot-collection-modal' not found in DOM!");
+            return;
+        }
+
+        // Check if user has real history
+        let historyData = null;
+        try {
+            historyData = await invoke("get_history");
+        } catch (e) {
+            console.error(e);
+        }
+        
+        let hasHistory = false;
+        if (historyData) {
+            for (const id in historyData) {
+                const item = historyData[id];
+                if (item && item.play_timestamps && item.play_timestamps.length > 0) {
+                    hasHistory = true;
+                    break;
+                }
+            }
+        }
+
+        if (!hasHistory) {
+            const exploreDemo = await checkPlayHistoryAndPrompt();
+            if (!exploreDemo) {
+                return; // User canceled or chose to listen
+            }
+        }
+
+        modal.classList.remove("hidden");
+        console.log("[Fate Book] Removed hidden class from modal");
+
+        // Fetch stats and evaluate
+        const stats = await getTarotStats();
+        console.log("[Fate Book] Stats fetched successfully:", stats);
+
+        const { unlockedCards } = evaluateUnlockedCards(stats);
+        console.log("[Fate Book] Cards evaluated:", unlockedCards);
+        const unlockedIds = unlockedCards.map(c => c.id);
+
+        // Update unlocked count text
+        const countSpan = document.getElementById("tarot-unlocked-count");
+        if (countSpan) {
+            countSpan.textContent = `${unlockedIds.length} / 22`;
+        }
+
+        // Render grid
+        renderTarotGrid(unlockedIds);
+        console.log("[Fate Book] Rendered grid with cards:", unlockedIds);
+    } catch (err) {
+        alert("[openTarotCollection Error] " + (err.stack || err));
+        console.error("[Fate Book Error]", err);
+    }
+}
+
+function renderTarotGrid(unlockedIds) {
+    const gridContainer = document.getElementById("tarot-grid-container");
+    if (!gridContainer) return;
+    gridContainer.innerHTML = "";
+
+    TAROT_PROFILES.forEach((card) => {
+        const isUnlocked = unlockedIds.includes(card.id);
+        const cardSlot = document.createElement("div");
+        cardSlot.className = "tarot-grid-slot";
+        cardSlot.style.cssText = `
+            border: 2px solid ${isUnlocked ? "#6e5eac" : "#2a2244"};
+            background: ${isUnlocked ? "rgba(110, 94, 172, 0.1)" : "rgba(0, 0, 0, 0.4)"};
+            border-radius: 4px;
+            padding: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        `;
+        
+        // Hover effects
+        cardSlot.onmouseover = () => {
+            cardSlot.style.transform = "scale(1.05)";
+            cardSlot.style.borderColor = isUnlocked ? "#ffb86c" : "#4a3e7a";
+        };
+        cardSlot.onmouseout = () => {
+            cardSlot.style.transform = "scale(1.0)";
+            cardSlot.style.borderColor = isUnlocked ? "#6e5eac" : "#2a2244";
+        };
+
+        const imageSrc = isUnlocked 
+            ? `/assets/tarot/${card.folder}/${card.file}` 
+            : `/assets/tarot/_cardBack/_cardBack_5x.png`;
+
+        cardSlot.innerHTML = `
+            <img src="${imageSrc}" style="
+                width: 100%;
+                aspect-ratio: 2/3.5;
+                object-fit: cover;
+                border: 1px solid ${isUnlocked ? "#4a3e7a" : "#201a35"};
+                border-radius: 2px;
+                filter: ${isUnlocked ? "none" : "brightness(0.4) sepia(0.6) hue-rotate(250deg)"};
+            " />
+            <div style="
+                font-family: monospace;
+                font-size: 0.72rem;
+                font-weight: bold;
+                color: ${isUnlocked ? "#ffb86c" : "#6272a4"};
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                width: 100%;
+            ">
+                ${isUnlocked ? card.name : `#${card.id} ???`}
+            </div>
+        `;
+
+        cardSlot.addEventListener("click", () => {
+            showTarotCardDetails(card, isUnlocked);
+        });
+
+        gridContainer.appendChild(cardSlot);
+    });
+}
+
+function showTarotCardDetails(card, isUnlocked) {
+    const detailPanel = document.getElementById("tarot-detail-panel");
+    if (!detailPanel) return;
+
+    if (!isUnlocked) {
+        detailPanel.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 12px; font-family: monospace; height: 100%;">
+                <div style="
+                    border: 3px solid #ff5555;
+                    border-radius: 4px;
+                    padding: 4px;
+                    background: #201324;
+                    width: 130px;
+                ">
+                    <img src="/assets/tarot/_cardBack/_cardBack_5x.png" style="
+                        width: 100%;
+                        aspect-ratio: 2/3.5;
+                        object-fit: cover;
+                        filter: brightness(0.3) sepia(0.8) hue-rotate(300deg);
+                    " />
+                </div>
+                <div style="text-align: center; width: 100%;">
+                    <span style="background: #ff5555; color: #fff; font-size: 0.65rem; font-weight: bold; padding: 2px 8px; border-radius: 10px; border: 1px solid #000;">LOCKED QUEST</span>
+                    <h3 style="color: #6272a4; margin: 10px 0 4px 0; font-size: 1.1rem; text-transform: uppercase;">Card #${card.id}</h3>
+                    <p style="color: #ff5555; font-size: 0.8rem; font-weight: bold; margin: 0 0 10px 0;">"${card.mysticTitle || 'Unknown Fate'}"</p>
+                </div>
+                
+                <div style="border-top: 1px dashed #4a3e7a; padding-top: 12px; width: 100%;">
+                    <h4 style="color: #ffb86c; margin: 0 0 6px 0; font-size: 0.85rem; text-transform: uppercase;">QUEST REQUIREMENT</h4>
+                    <p style="color: #f8f8f2; font-size: 0.8rem; line-height: 1.4; margin: 0;">${card.questDescription}</p>
+                </div>
+
+                <div style="margin-top: auto; border: 1px solid #4a3e7a; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 4px; text-align: center; width: 100%; box-sizing: border-box;">
+                    <p style="color: #6272a4; font-size: 0.72rem; margin: 0; line-height: 1.3;">Keep listening to your local audio tracks in Spoti-Tauri to fulfill this destiny card!</p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    const statsHTML = Object.entries(card.gamingStats).map(([key, val]) => {
+        const barColor = key === 'tempo' ? '#ff5555' : key === 'variety' ? '#50fa7b' : key === 'obscurity' ? '#8be9fd' : '#ff79c6';
+        return `
+            <div style="margin-bottom: 6px;">
+                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: #f8f8f2; text-transform: uppercase; margin-bottom: 2px;">
+                    <span>${key}</span>
+                    <span style="color: ${barColor}">${val}</span>
+                </div>
+                <div style="height: 6px; background: rgba(0, 0, 0, 0.4); border-radius: 3px; overflow: hidden; border: 1px solid #201a35;">
+                    <div style="width: ${val}%; height: 100%; background: ${barColor};"></div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    detailPanel.innerHTML = `
+        <div style="display: flex; flex-direction: column; gap: 14px; font-family: monospace;">
+            <div style="align-self: center; display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                <div style="
+                    border: 3px solid #ffb86c;
+                    border-radius: 4px;
+                    padding: 4px;
+                    background: #1c183a;
+                    width: 120px;
+                    box-shadow: 0 0 15px rgba(255, 184, 108, 0.2);
+                ">
+                    <img src="/assets/tarot/${card.folder}/${card.file}" style="
+                        width: 100%;
+                        aspect-ratio: 2/3.5;
+                        object-fit: cover;
+                    " />
+                </div>
+                <span style="background: #50fa7b; color: #000; font-size: 0.65rem; font-weight: 700; padding: 2px 8px; border-radius: 10px; border: 1px solid #000; text-transform: uppercase;">UNLOCKED</span>
+            </div>
+
+            <div style="text-align: center;">
+                <h3 style="color: #ffb86c; margin: 0 0 2px 0; font-size: 1.15rem;">${card.name}</h3>
+                <p style="color: #8be9fd; font-size: 0.75rem; margin: 0; font-style: italic; text-transform: uppercase;">"${card.mysticTitle}"</p>
+            </div>
+
+            <div style="border-top: 1px dashed #4a3e7a; padding-top: 10px;">
+                <h4 style="color: #ff79c6; margin: 0 0 8px 0; font-size: 0.8rem; text-transform: uppercase;">Attributes</h4>
+                ${statsHTML}
+            </div>
+
+            <div style="border-top: 1px dashed #4a3e7a; padding-top: 10px; display: flex; flex-direction: column; gap: 8px;">
+                <div>
+                    <h4 style="color: #50fa7b; margin: 0 0 2px 0; font-size: 0.8rem; text-transform: uppercase;">▲ Upright Vibe</h4>
+                    <p style="color: #f8f8f2; font-size: 0.75rem; line-height: 1.35; margin: 0;">${card.uprightMeaning}</p>
+                </div>
+                <div>
+                    <h4 style="color: #ff5555; margin: 0 0 2px 0; font-size: 0.8rem; text-transform: uppercase;">▼ Reversed Warning</h4>
+                    <p style="color: #f8f8f2; font-size: 0.75rem; line-height: 1.35; margin: 0;">${card.reversedMeaning}</p>
+                </div>
+            </div>
+
+            <div style="border-top: 1px dashed #4a3e7a; padding-top: 10px; background: rgba(0,0,0,0.25); padding: 8px; border-radius: 4px;">
+                <h4 style="color: #bd93f9; margin: 0 0 4px 0; font-size: 0.75rem; text-transform: uppercase;">Quest Lore</h4>
+                <p style="color: #8be9fd; font-size: 0.72rem; line-height: 1.35; margin: 0;">${card.loreDescription}</p>
+            </div>
+        </div>
+    `;
+}
+
+// Tarot Collection Button bindings handled via global delegation

@@ -361,6 +361,7 @@ export function initScreensaverEvents() {
         ssVolBar.addEventListener("input", (e) => {
             const val = Number(e.target.value);
             audioPlayer.volume = val / 100;
+            localStorage.setItem("audio-player-volume", val);
             if (volumeBar) volumeBar.value = val; // Synchronize with the main volume bar
         });
         ssVolBar.addEventListener("click", (e) => {

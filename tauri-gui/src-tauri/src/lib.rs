@@ -8,7 +8,7 @@ use std::process::Command;
 use std::sync::Mutex;
 use dotenvy::dotenv;
 use std::env;
-use tauri::{Manager, State};
+use tauri::{Manager, State, Emitter};
 use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
 
 #[cfg(windows)]
@@ -55,6 +55,8 @@ struct SetSettingsPayload {
     spotify_client_secret: Option<String>,
     #[serde(alias = "lastfm_api_key")]
     lastfm_api_key: Option<String>,
+    #[serde(alias = "close_behavior")]
+    close_behavior: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -69,6 +71,8 @@ pub struct AppSettings {
     pub spotify_client_secret: Option<String>,
     #[serde(default, alias = "lastfmApiKey")]
     pub lastfm_api_key: Option<String>,
+    #[serde(default, alias = "closeBehavior")]
+    pub close_behavior: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -334,6 +338,7 @@ fn merge_app_settings(mem: AppSettings, disk: AppSettings) -> AppSettings {
         spotify_client_secret: non_empty_opt(mem.spotify_client_secret)
             .or(non_empty_opt(disk.spotify_client_secret)),
         lastfm_api_key: non_empty_opt(mem.lastfm_api_key).or(non_empty_opt(disk.lastfm_api_key)),
+        close_behavior: non_empty_opt(mem.close_behavior).or(non_empty_opt(disk.close_behavior)),
     }
 }
 
@@ -1153,10 +1158,61 @@ fn window_toggle_maximize(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn is_window_maximized(app: tauri::AppHandle) -> Result<bool, String> {
+    let w = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    w.is_maximized().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn window_start_drag(
+    app: tauri::AppHandle,
+    screen_x: i32,
+    screen_y: i32,
+    restored_width: Option<i32>,
+    restored_height: Option<i32>,
+) -> Result<(), String> {
+    let w = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    if w.is_maximized().map_err(|e| e.to_string())? {
+        w.unmaximize().map_err(|e| e.to_string())?;
+        // Wait for unmaximize to complete asynchronously
+        let mut attempts = 0;
+        while w.is_maximized().unwrap_or(false) && attempts < 15 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            attempts += 1;
+        }
+        let width = restored_width.unwrap_or(1000);
+        let height = restored_height.unwrap_or(700);
+        let _ = w.set_size(tauri::PhysicalSize::new(width, height));
+        let new_x = screen_x - (width / 2);
+        let new_y = screen_y - 15;
+        let _ = w.set_position(tauri::PhysicalPosition::new(new_x, new_y));
+    }
+    w.start_dragging().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn window_close(app: tauri::AppHandle) -> Result<(), String> {
     app.get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?
         .close()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
+
+#[tauri::command]
+fn window_hide(app: tauri::AppHandle) -> Result<(), String> {
+    app.get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?
+        .hide()
         .map_err(|e| e.to_string())
 }
 
@@ -1246,6 +1302,9 @@ fn set_settings(input: SetSettingsPayload, state: State<AppState>) -> Result<App
     }
     if let Some(v) = input.lastfm_api_key {
         settings.lastfm_api_key = if v.trim().is_empty() { None } else { Some(v) };
+    }
+    if let Some(v) = input.close_behavior {
+        settings.close_behavior = if v.trim().is_empty() { None } else { Some(v) };
     }
     persist_settings(&settings)?;
     let saved = load_settings_from_disk();
@@ -1694,6 +1753,8 @@ async fn stream_song(
     fetch_if_missing: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<StreamResult, String> {
+    ensure_stream_server_started();
+    
     use std::hash::{Hash, Hasher};
     use std::collections::hash_map::DefaultHasher;
 
@@ -1870,6 +1931,63 @@ fn delete_all_downloads(state: State<'_, AppState>) -> Result<(), String> {
     let _ = save_download_index(&settings, &std::collections::HashMap::new());
     Ok(())
 }
+
+#[tauri::command]
+fn wipe_all_data(delete_downloads: bool, state: State<'_, AppState>) -> Result<(), String> {
+    let settings_cloned = state.settings.lock().unwrap().clone();
+
+    if delete_downloads {
+        let index = load_download_index(&settings_cloned);
+        let download_dir = resolve_download_dir(&settings_cloned);
+        for filename in index.values() {
+            let file_path = download_dir.join(filename);
+            if file_path.exists() {
+                let _ = std::fs::remove_file(file_path);
+            }
+        }
+        let index_p = download_index_path(&settings_cloned);
+        if index_p.exists() {
+            let _ = std::fs::remove_file(index_p);
+        }
+    }
+
+    let history_p = history_file();
+    if history_p.exists() {
+        let _ = std::fs::remove_file(history_p);
+    }
+
+    let playlists_p = playlists_file();
+    if playlists_p.exists() {
+        let _ = std::fs::remove_file(playlists_p);
+    }
+
+    let settings_p = settings_file();
+    if settings_p.exists() {
+        let _ = std::fs::remove_file(settings_p);
+    }
+
+    // Reset settings in AppState and recreate default settings file
+    let default_settings = load_settings_from_disk();
+    *state.settings.lock().unwrap() = default_settings.clone();
+
+    // Clear caches
+    let cache_dir = resolve_cache_dir(&default_settings);
+    if cache_dir.exists() && cache_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    let _ = std::fs::remove_file(path);
+                } else if path.is_dir() {
+                    let _ = std::fs::remove_dir_all(path);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 
 #[derive(Serialize)]
 struct DownloadItemInfo {
@@ -2540,6 +2658,15 @@ fn start_stream_server() {
     });
 }
 
+static STREAM_SERVER_ONCE: std::sync::Once = std::sync::Once::new();
+
+fn ensure_stream_server_started() {
+    STREAM_SERVER_ONCE.call_once(|| {
+        start_stream_server();
+    });
+}
+
+
 // ---------- Discord Rich Presence ----------
 
 /// Discord Application ID — create one at https://discord.com/developers/applications
@@ -2622,12 +2749,11 @@ fn discord_clear_presence(state: State<AppState>) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let settings = load_settings_from_disk();
-    let discord = init_discord_rpc();
+    let discord: Option<DiscordIpcClient> = None;
 
     tauri::Builder::default()
         .setup(|app| {
             let _ = APP_HANDLE.set(app.handle().clone());
-            start_stream_server();
             // Auto-open devtools in debug builds
             #[cfg(debug_assertions)]
             {
@@ -2635,7 +2761,65 @@ pub fn run() {
                     window.open_devtools();
                 }
             }
+
+            // Create the tray icon
+            if let Some(icon) = app.default_window_icon() {
+                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit SpotDL GUI", true, None::<&str>)?;
+                let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+                let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
+
+                let _tray = tauri::tray::TrayIconBuilder::new()
+                    .icon(icon.clone())
+                    .menu(&menu)
+                    .show_menu_on_left_click(false)
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.unminimize();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let tauri::tray::TrayIconEvent::Click {
+                            button: tauri::tray::MouseButton::Left,
+                            button_state: tauri::tray::MouseButtonState::Up,
+                            ..
+                        } = event {
+                            let app = tray.app_handle();
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.unminimize();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
+            }
+
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                let settings = effective_settings(&state);
+                let behavior = settings.close_behavior.as_deref().unwrap_or("prompt");
+                if behavior == "minimize" {
+                    api.prevent_close();
+                    let _ = window.hide();
+                } else if behavior == "prompt" {
+                    api.prevent_close();
+                    let _ = window.emit("close-requested", serde_json::Value::Null);
+                }
+            }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2649,7 +2833,11 @@ pub fn run() {
             get_geo_country,
             window_minimize,
             window_toggle_maximize,
+            is_window_maximized,
+            window_start_drag,
             window_close,
+            window_hide,
+            exit_app,
             get_api_key,
             fetch_lastfm,
             fetch_itunes_cover_art,
@@ -2673,6 +2861,7 @@ pub fn run() {
             rebuild_download_library,
             delete_downloaded_song,
             delete_all_downloads,
+            wipe_all_data,
             check_system_dependencies,
             get_cache_size,
             clear_cache,
