@@ -1,6 +1,8 @@
 const lyricsState = {
     payload: null,
     mode: "synced",
+    loading: false,
+    error: null,
 };
 
 const MAX_LINE_FALLOFF = 4;
@@ -40,11 +42,29 @@ function setLyricsMode(mode) {
 
 function setLyricsPayload(payload) {
     lyricsState.payload = payload || null;
+    lyricsState.loading = false;
+    lyricsState.error = null;
     if (!payload?.synced?.length) {
         lyricsState.mode = "plain";
     } else {
         lyricsState.mode = "synced";
     }
+    renderLyricsPanels();
+}
+
+function setLyricsLoading(loading) {
+    lyricsState.loading = Boolean(loading);
+    if (loading) {
+        lyricsState.payload = null;
+        lyricsState.error = null;
+    }
+    renderLyricsPanels();
+}
+
+function setLyricsError(error) {
+    lyricsState.error = error || null;
+    lyricsState.loading = false;
+    lyricsState.payload = null;
     renderLyricsPanels();
 }
 
@@ -135,8 +155,12 @@ function buildSyncedMarkup(payload, rootId) {
 function buildLyricsMarkup(rootId) {
     const payload = lyricsState.payload;
     const mode = getMode(payload);
-    if (!payload) {
+    if (lyricsState.loading) {
         return `${buildLyricsHeader(null, mode)}<div class="lyrics-empty">Loading lyrics...</div>`;
+    }
+    if (!payload) {
+        const msg = lyricsState.error ? `Lyrics unavailable: ${lyricsState.error}` : "No lyrics available.";
+        return `${buildLyricsHeader(null, mode)}<div class="lyrics-empty">${escapeHtml(msg)}</div>`;
     }
 
     return `${buildLyricsHeader(payload, mode)}<div class="lyrics-body" data-lyrics-body>${mode === "synced" ? buildSyncedMarkup(payload, rootId) : buildPlainMarkup(payload)}</div>`;
@@ -310,5 +334,7 @@ export {
     renderLyricsPanel,
     setLyricsMode,
     setLyricsPayload,
+    setLyricsLoading,
+    setLyricsError,
     syncLyricsPlayback,
 };

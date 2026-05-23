@@ -60,6 +60,8 @@ import {
 import {
     renderLyricsPanel,
     setLyricsPayload,
+    setLyricsLoading,
+    setLyricsError,
     syncLyricsPlayback,
 } from "./components/lyrics-sync.js";
 const { invoke, convertFileSrc } = window.__TAURI__.core;
@@ -5891,6 +5893,7 @@ function drawDetailCanvas(title, artist) {
 
 async function loadDetailLyrics(artist, title) {
     if (!detailLyricsEl || !artist || !title) return;
+    setLyricsLoading(true);
     detailLyricsEl.innerHTML = getLyricsSkeletonHTML();
     const id = ++lyricsRequestId;
     try {
@@ -5903,6 +5906,7 @@ async function loadDetailLyrics(artist, title) {
         renderLyricsPanel("detail-lyrics");
     } catch (err) {
         if (id !== lyricsRequestId) return;
+        setLyricsError(String(err));
         detailLyricsEl.innerHTML = `<div class="lyrics-empty">Lyrics unavailable: ${String(err)}</div>`;
     }
 }
