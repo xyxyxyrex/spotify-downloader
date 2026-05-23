@@ -2,6 +2,12 @@ import sys
 import re
 from ytmusicapi import YTMusic
 
+try:
+    import pykakasi
+    kakasi_instance = pykakasi.kakasi()
+except Exception:
+    kakasi_instance = None
+
 def clean_text(text):
     if not text:
         return set()
@@ -11,8 +17,20 @@ def clean_text(text):
     # Remove common extra terms
     text = re.sub(r'\b(official|video|audio|lyrics|lyric|hd|hq|live|cover|remix|version|edit)\b', '', text)
     # Extract alphanumeric words
-    words = re.findall(r'\b\w+\b', text)
-    return set(words)
+    words = set(re.findall(r'\b\w+\b', text))
+    
+    # Extract Romaji translations for Japanese text
+    if kakasi_instance:
+        try:
+            res = kakasi_instance.convert(text)
+            romaji_text = " ".join([item['hepburn'] for item in res]).lower()
+            romaji_words = re.findall(r'\b\w+\b', romaji_text)
+            words.update(romaji_words)
+        except Exception:
+            pass
+            
+    return words
+
 
 def find_best_match(results, target_title, target_artist, target_duration):
     best_video_id = None
