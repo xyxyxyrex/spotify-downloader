@@ -45,13 +45,23 @@
     background: var(--scrollbar-track);
 }
 
+html {
+    height: 100% !important;
+    width: 100% !important;
+    background-color: #121212 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
 body {
-    margin: 0;
-    padding: 0;
-    background-color: var(--bg);
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: #121212 !important;
     color: var(--fg);
     font-family: var(--font-family, "Consolas", "Courier New", monospace);
-    height: 100vh;
+    height: 100% !important;
+    width: 100% !important;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -207,6 +217,7 @@ select::placeholder {
     grid-template-areas:
         "nav content"
         "player player";
+    background-color: #121212 !important;
 }
 
 /* Nav sidebar */
