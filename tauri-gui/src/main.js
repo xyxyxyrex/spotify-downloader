@@ -8132,6 +8132,76 @@ function stopScreensaverClock() {
     }
 }
 
+function updateScreensaverLiquidColors(artUrl) {
+    const blobs = [
+        document.getElementById("ss-bg-blob-1"),
+        document.getElementById("ss-bg-blob-2"),
+        document.getElementById("ss-bg-blob-3"),
+        document.getElementById("ss-bg-blob-4"),
+    ];
+    if (!blobs[0]) return;
+
+    if (!artUrl) {
+        const defaults = [
+            "rgba(231, 76, 60, 0.45)",
+            "rgba(52, 152, 219, 0.45)",
+            "rgba(155, 89, 182, 0.4)",
+            "rgba(46, 204, 113, 0.35)",
+        ];
+        blobs.forEach((blob, idx) => {
+            if (blob) blob.style.backgroundColor = defaults[idx];
+        });
+        return;
+    }
+
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+        try {
+            const canvas = document.createElement("canvas");
+            canvas.width = 4;
+            canvas.height = 4;
+            const ctx = canvas.getContext("2d");
+            ctx.drawImage(img, 0, 0, 4, 4);
+            const data = ctx.getImageData(0, 0, 4, 4).data;
+            const samples = [0, 5, 10, 15];
+            samples.forEach((sampleIndex, idx) => {
+                const r = data[sampleIndex * 4];
+                const g = data[sampleIndex * 4 + 1];
+                const b = data[sampleIndex * 4 + 2];
+                if (blobs[idx]) {
+                    blobs[idx].style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${0.38 + idx * 0.04})`;
+                }
+            });
+        } catch (e) {
+            console.warn("CORS or canvas error extracting album art colors:", e);
+            if (currentSong) {
+                const colors = [
+                    hashColor(currentSong.title + currentSong.artist),
+                    hashColor(currentSong.artist + currentSong.title),
+                    hashColor(currentSong.title + "ss"),
+                    hashColor(currentSong.artist + "ss"),
+                ];
+                blobs.forEach((blob, idx) => {
+                    if (blob) blob.style.backgroundColor = colors[idx] + "66";
+                });
+            }
+        }
+    };
+    img.onerror = () => {
+        const defaults = [
+            "rgba(231, 76, 60, 0.45)",
+            "rgba(52, 152, 219, 0.45)",
+            "rgba(155, 89, 182, 0.4)",
+            "rgba(46, 204, 113, 0.35)",
+        ];
+        blobs.forEach((blob, idx) => {
+            if (blob) blob.style.backgroundColor = defaults[idx];
+        });
+    };
+    img.src = artUrl;
+}
+
 async function updateScreensaverUI() {
     const ssOverlay = document.getElementById("fullscreen-screensaver");
     if (!ssOverlay || ssOverlay.classList.contains("hidden")) return;
@@ -8152,6 +8222,7 @@ async function updateScreensaverUI() {
         artistEl.textContent = "";
         artImg.style.opacity = "0";
         bgEl.style.backgroundImage = "none";
+        updateScreensaverLiquidColors(null);
         return;
     }
 
@@ -8175,7 +8246,7 @@ async function updateScreensaverUI() {
         );
         titleEl.style.fontSize = `${dynamicTitleSize}rem`;
     } else {
-        titleEl.style.fontSize = "3.2rem";
+        titleEl.style.fontSize = "";
     }
 
     // Auto dynamic font scaling for extremely long artist names
@@ -8187,7 +8258,7 @@ async function updateScreensaverUI() {
         );
         artistEl.style.fontSize = `${dynamicArtistSize}rem`;
     } else {
-        artistEl.style.fontSize = "1.8rem";
+        artistEl.style.fontSize = "";
     }
 
     await resolveTrackCoverUrl(currentSong);
@@ -8204,6 +8275,7 @@ async function updateScreensaverUI() {
         artImg.src = artUrl;
         artImg.style.opacity = "1";
         bgEl.style.backgroundImage = `url('${artUrl}')`;
+        updateScreensaverLiquidColors(artUrl);
     } else {
         const fallback = generateThumbnail(
             currentSong.title,
@@ -8213,6 +8285,7 @@ async function updateScreensaverUI() {
         artImg.src = "";
         artImg.style.opacity = "0";
         bgEl.style.backgroundImage = "none";
+        updateScreensaverLiquidColors(null);
         if (wrap) {
             wrap.appendChild(fallback);
         }

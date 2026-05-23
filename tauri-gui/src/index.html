@@ -1412,7 +1412,18 @@
 
     <!-- Now Playing Fullscreen Screensaver -->
     <div id="fullscreen-screensaver" class="screensaver-overlay hidden">
-        <div id="screensaver-bg" class="screensaver-bg"></div>
+        <div id="screensaver-bg" class="screensaver-bg">
+            <div id="ss-bg-blob-1" class="screensaver-bg-glow blob-1"></div>
+            <div id="ss-bg-blob-2" class="screensaver-bg-glow blob-2"></div>
+            <div id="ss-bg-blob-3" class="screensaver-bg-glow blob-3"></div>
+            <div id="ss-bg-blob-4" class="screensaver-bg-glow blob-4"></div>
+        </div>
+        <svg style="display:none">
+            <filter id="liquid-warp">
+                <feTurbulence type="fractalNoise" baseFrequency="0.008" numOctaves="2" result="noise" />
+                <feDisplacementMap in="SourceGraphic" in2="noise" scale="120" xChannelSelector="R" yChannelSelector="G" />
+            </filter>
+        </svg>
         <div class="screensaver-content">
             <div class="screensaver-left">
                 <div id="screensaver-art-wrap" class="screensaver-art-wrap">
