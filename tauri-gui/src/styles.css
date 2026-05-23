@@ -5292,16 +5292,16 @@ body.dragging-active #playlist-list li * {
 }
 
 #fullscreen-screensaver:not(.pure-lyrics-mode) .screensaver-right.lyrics-active .screensaver-time-wrap {
-    transform: translateY(clamp(-90px, -13vh, -140px)) !important;
+    transform: translateY(-22vh) !important; /* Shift higher up to completely clear the lyrics panel */
 }
 
 /* When NOT in pure-lyrics-mode, position the lyrics panel absolute at the bottom and transition smoothly */
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel {
     position: absolute !important;
-    bottom: clamp(20px, 5vh, 60px) !important;
+    bottom: clamp(10px, 3.5vh, 35px) !important; /* Position slightly lower to maximize gap */
     right: clamp(20px, 4vw, 60px) !important;
     width: calc(100% - clamp(40px, 8vw, 120px)) !important;
-    max-height: 42vh !important; /* Adjusted to fit perfectly in absolute position */
+    max-height: 38vh !important; /* Constrain height to guarantee zero overlap with clock */
     z-index: 15 !important;
     align-self: flex-end !important;
     opacity: 0 !important;
@@ -5319,7 +5319,7 @@ body.dragging-active #playlist-list li * {
 
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .synced-lyrics-list,
 #fullscreen-screensaver:not(.pure-lyrics-mode) .fullscreen-lyrics-panel .lyrics-plain {
-    max-height: 35vh !important; /* Expanded internally to match */
+    max-height: 30vh !important; /* Cap height to fit cleanly within 38vh panel and prevent overlaps */
 }
 
 /* When .pure-lyrics-mode is active, hide clock & date, hide lyrics toggle button, and expand layout height */
