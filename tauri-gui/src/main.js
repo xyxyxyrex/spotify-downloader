@@ -2512,7 +2512,7 @@ async function seekLiveStreamAtRatio(ratio) {
     if (duration <= 0) return;
 
     const targetSec = Math.max(0, Math.min(ratio * duration, duration));
-    const wasPlaying = !audioPlayer.paused;
+    const wasPlaying = isPlaying;
 
     const run = async () => {
         audioPlayer.pause();
