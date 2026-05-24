@@ -1600,6 +1600,16 @@ fn is_artist_match(query_artist: &str, result_artist: &str) -> bool {
     false
 }
 
+fn is_title_match(query_title: &str, result_title: &str) -> bool {
+    let q_clean = clean_title(query_title).to_lowercase();
+    let r_clean = clean_title(result_title).to_lowercase();
+    
+    let q = q_clean.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    let r = r_clean.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
+    
+    q == r || q.contains(&r) || r.contains(&q)
+}
+
 #[tauri::command]
 async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<String>, String> {
     if artist.trim().is_empty() || title.trim().is_empty() {
@@ -1630,9 +1640,28 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         .and_then(|r| r.as_array());
 
     if let Some(tracks) = results {
+        // Priority 1: Match both artist and title
         for track in tracks {
             let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
-            
+            let res_title = track.get("trackName").and_then(|t| t.as_str()).unwrap_or("");
+            if is_artist_match(&artist, res_artist) && is_title_match(&title, res_title) {
+                if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
+                    return Ok(Some(art_url.to_string()));
+                }
+            }
+        }
+        // Priority 2: Match title only
+        for track in tracks {
+            let res_title = track.get("trackName").and_then(|t| t.as_str()).unwrap_or("");
+            if is_title_match(&title, res_title) {
+                if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
+                    return Ok(Some(art_url.to_string()));
+                }
+            }
+        }
+        // Priority 3: Fallback to matching artist only
+        for track in tracks {
+            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
             if is_artist_match(&artist, res_artist) {
                 if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
                     return Ok(Some(art_url.to_string()));
@@ -1641,7 +1670,7 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         }
     }
 
-    // Fallback to first result if no artist matched
+    // Fallback to first result if absolutely nothing else matched
     let first_art = data
         .get("results")
         .and_then(|r| r.as_array())
@@ -1651,6 +1680,71 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         .map(|u| u.to_string());
 
     Ok(first_art)
+}
+
+#[tauri::command]
+async fn fetch_deezer_cover_art(artist: String, title: String) -> Result<Option<String>, String> {
+    if artist.trim().is_empty() || title.trim().is_empty() {
+        return Ok(None);
+    }
+    
+    let query = format!("artist:\"{}\" track:\"{}\"", artist, title);
+    let url = format!(
+        "https://api.deezer.com/search?q={}&limit=5",
+        urlencoding::encode(&query)
+    );
+
+    let response = reqwest::get(&url)
+        .await
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let data: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let results = data.get("data")
+        .and_then(|r| r.as_array());
+
+    if let Some(tracks) = results {
+        // Priority 1: Match both artist and title
+        for track in tracks {
+            let artist_obj = track.get("artist");
+            let res_artist = artist_obj.and_then(|a| a.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+            let res_title = track.get("title").and_then(|t| t.as_str()).unwrap_or("");
+            
+            if is_artist_match(&artist, res_artist) && is_title_match(&title, res_title) {
+                if let Some(album) = track.get("album") {
+                    if let Some(art_url) = album.get("cover_xl").and_then(|u| u.as_str()) {
+                        return Ok(Some(art_url.to_string()));
+                    }
+                    if let Some(art_url) = album.get("cover_big").and_then(|u| u.as_str()) {
+                        return Ok(Some(art_url.to_string()));
+                    }
+                }
+            }
+        }
+        // Priority 2: Match title only
+        for track in tracks {
+            let res_title = track.get("title").and_then(|t| t.as_str()).unwrap_or("");
+            if is_title_match(&title, res_title) {
+                if let Some(album) = track.get("album") {
+                    if let Some(art_url) = album.get("cover_xl").and_then(|u| u.as_str()) {
+                        return Ok(Some(art_url.to_string()));
+                    }
+                    if let Some(art_url) = album.get("cover_big").and_then(|u| u.as_str()) {
+                        return Ok(Some(art_url.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(None)
 }
 
 #[tauri::command]
@@ -2968,6 +3062,7 @@ pub fn run() {
             get_api_key,
             fetch_lastfm,
             fetch_itunes_cover_art,
+            fetch_deezer_cover_art,
             fetch_itunes_preview,
             fetch_lyrics,
             fetch_lyrics_payload,

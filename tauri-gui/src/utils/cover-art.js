@@ -82,8 +82,36 @@ export async function fetchiTunesCoverArt(artist, title) {
     return result;
 }
 
+const deezerArtCache = new Map();
+
 /**
- * Resolve best cover URL: existing image → Last.fm meta → iTunes.
+ * Query Deezer API via Tauri backend to fetch high-res cover art.
+ * @returns {Promise<string|null>}
+ */
+export async function fetchDeezerCoverArt(artist, title) {
+    if (!artist?.trim() || !title?.trim()) return null;
+    const cacheKey = `${artist}::${title}`;
+    if (deezerArtCache.has(cacheKey)) {
+        return deezerArtCache.get(cacheKey);
+    }
+
+    let result = null;
+    if (window.__TAURI__?.core?.invoke) {
+        try {
+            const artUrl = await window.__TAURI__.core.invoke("fetch_deezer_cover_art", { artist, title });
+            if (artUrl && isUsableCoverUrl(artUrl)) {
+                result = artUrl;
+            }
+        } catch (e) {
+            console.debug("Deezer artwork fallback failed:", e);
+        }
+    }
+    deezerArtCache.set(cacheKey, result);
+    return result;
+}
+
+/**
+ * Resolve best cover URL: existing image → Last.fm meta → iTunes → Deezer.
  * Mutates song.image when a URL is found.
  */
 export async function resolveTrackCoverUrl(song, options = {}) {
@@ -97,6 +125,9 @@ export async function resolveTrackCoverUrl(song, options = {}) {
     }
     if (!isUsableCoverUrl(url)) {
         url = await fetchiTunesCoverArt(song.artist, song.title);
+    }
+    if (!isUsableCoverUrl(url)) {
+        url = await fetchDeezerCoverArt(song.artist, song.title);
     }
 
     if (isUsableCoverUrl(url)) {

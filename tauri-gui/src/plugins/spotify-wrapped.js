@@ -831,12 +831,69 @@ async function launchStatsAndFate() {
     const topTrackCount = playCountsMap[0]?.count || 0;
     const sortedArtists = [...artistMap.entries()].sort((a, b) => b[1] - a[1]);
     const topArtists = sortedArtists.slice(0, 5);
-    const genres = [
-        { name: "Synth-Pop", percentage: 42, color: "#1db954" },
-        { name: "Electronic", percentage: 28, color: "#9b59b6" },
-        { name: "Alt-Rock", percentage: 18, color: "#e74c3c" },
-        { name: "Indie Pop", percentage: 12, color: "#3498db" },
-    ];
+    const artistGenres = {
+        "the weeknd": ["R&B", "Synth-Pop", "Pop"],
+        "taylor swift": ["Pop", "Folk", "Indie"],
+        "ed sheeran": ["Pop", "Acoustic", "Singer-Songwriter"],
+        "dua lipa": ["Pop", "Dance", "Disco"],
+        "harry styles": ["Pop Rock", "Indie Pop"],
+        "billie eilish": ["Alt-Pop", "Electronic", "Indie"],
+        "fitterkarma": ["Indie/OPM", "Alt-Pop", "Synth-Pop"],
+        "yorushika": ["J-Pop", "J-Rock", "Indie Rock"],
+        "daniel caesar": ["R&B", "Soul", "Neo-Soul"],
+        "kid laroi": ["Pop Rap", "R&B"],
+        "justin bieber": ["Pop", "R&B"],
+        "the neighbourhood": ["Alt-Rock", "Indie Rock"],
+        "twenty one pilots": ["Alt-Rock", "Indie Pop", "Hip-Hop"]
+    };
+
+    const genreCounts = {};
+    historyList.forEach((track) => {
+        const count = track.play_timestamps.length;
+        const artistKey = String(track.artist || "").toLowerCase().trim();
+        
+        let genresForTrack = ["Pop"];
+        let found = false;
+        for (const [key, val] of Object.entries(artistGenres)) {
+            if (artistKey.includes(key) || key.includes(artistKey)) {
+                genresForTrack = val;
+                found = true;
+                break;
+            }
+        }
+        
+        if (!found) {
+            const hash = artistKey.split("").reduce((acc, char) => acc + char.charCodeAt(0), 0);
+            const fallbackPool = [
+                ["Indie", "Acoustic", "Alt-Pop"],
+                ["Pop Rock", "Alt-Rock", "Indie Rock"],
+                ["R&B", "Soul", "Lo-Fi"],
+                ["Electronic", "Dance", "Synth-Pop"],
+                ["Soundtrack", "Classical", "Ambient"],
+                ["J-Pop", "Anime", "Pop"]
+            ];
+            genresForTrack = fallbackPool[hash % fallbackPool.length];
+        }
+        
+        genresForTrack.forEach((g) => {
+            genreCounts[g] = (genreCounts[g] || 0) + count;
+        });
+    });
+
+    const totalGenrePlays = Object.values(genreCounts).reduce((a, b) => a + b, 0);
+    const sortedGenres = Object.entries(genreCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 4);
+
+    const colors = ["#1db954", "#9b59b6", "#e74c3c", "#3498db"];
+    const genres = sortedGenres.map(([name, count], idx) => {
+        const percentage = totalGenrePlays > 0 ? Math.round((count / totalGenrePlays) * 100) : 25;
+        return {
+            name,
+            percentage,
+            color: colors[idx % colors.length]
+        };
+    });
     const minutesListened = Math.round(totalDurationSecs / 60);
     const hoursListened = (totalDurationSecs / 3600).toFixed(1);
 
