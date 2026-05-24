@@ -192,6 +192,59 @@ function stopWrappedAudio() {
 }
 
 // ---- Ambient Particle System ----
+const WRAPPED_CANVAS_GRADIENTS = [
+    // Slide 0: Welcome - deep green/teal
+    [
+        { cx: 0.3, cy: 0.2, r: 0.7, c1: "rgba(29,185,84,0.28)", c2: "rgba(29,185,84,0)" },
+        { cx: 0.7, cy: 0.8, r: 0.7, c1: "rgba(0,188,212,0.22)", c2: "rgba(0,188,212,0)" }
+    ],
+    // Slide 1: Play count - purple/green
+    [
+        { cx: 0.5, cy: 0.4, r: 0.7, c1: "rgba(155,89,182,0.32)", c2: "rgba(155,89,182,0)" },
+        { cx: 0.3, cy: 0.7, r: 0.7, c1: "rgba(29,185,84,0.28)", c2: "rgba(29,185,84,0)" }
+    ],
+    // Slide 2: Discovery - orange/warm
+    [
+        { cx: 0.6, cy: 0.3, r: 0.7, c1: "rgba(255,152,0,0.32)", c2: "rgba(255,152,0,0)" },
+        { cx: 0.3, cy: 0.8, r: 0.7, c1: "rgba(213,16,7,0.18)", c2: "rgba(213,16,7,0)" }
+    ],
+    // Slide 3: Top Track - vibrant green
+    [
+        { cx: 0.4, cy: 0.35, r: 0.7, c1: "rgba(29,185,84,0.38)", c2: "rgba(29,185,84,0)" },
+        { cx: 0.75, cy: 0.7, r: 0.7, c1: "rgba(0,188,212,0.22)", c2: "rgba(0,188,212,0)" }
+    ],
+    // Slide 4: Top Artists - violet
+    [
+        { cx: 0.35, cy: 0.4, r: 0.7, c1: "rgba(103,58,183,0.32)", c2: "rgba(103,58,183,0)" },
+        { cx: 0.8, cy: 0.25, r: 0.7, c1: "rgba(233,30,99,0.22)", c2: "rgba(233,30,99,0)" }
+    ],
+    // Slide 5: Genres - cyan
+    [
+        { cx: 0.55, cy: 0.25, r: 0.7, c1: "rgba(0,188,212,0.32)", c2: "rgba(0,188,212,0)" },
+        { cx: 0.25, cy: 0.75, r: 0.7, c1: "rgba(139,195,74,0.22)", c2: "rgba(139,195,74,0)" }
+    ],
+    // Slide 6: Time - pink/magenta
+    [
+        { cx: 0.4, cy: 0.3, r: 0.7, c1: "rgba(233,30,99,0.32)", c2: "rgba(233,30,99,0)" },
+        { cx: 0.7, cy: 0.75, r: 0.7, c1: "rgba(255,87,34,0.22)", c2: "rgba(255,87,34,0)" }
+    ],
+    // Slide 7: Personality - green/purple blend
+    [
+        { cx: 0.5, cy: 0.45, r: 0.7, c1: "rgba(29,185,84,0.28)", c2: "rgba(29,185,84,0)" },
+        { cx: 0.6, cy: 0.8, r: 0.7, c1: "rgba(155,89,182,0.22)", c2: "rgba(155,89,182,0)" }
+    ],
+    // Slide 8: Explorer - lime/teal
+    [
+        { cx: 0.3, cy: 0.35, r: 0.7, c1: "rgba(139,195,74,0.32)", c2: "rgba(139,195,74,0)" },
+        { cx: 0.75, cy: 0.6, r: 0.7, c1: "rgba(0,188,212,0.22)", c2: "rgba(0,188,212,0)" }
+    ],
+    // Slide 9: Summary - cinematic
+    [
+        { cx: 0.5, cy: 0.25, r: 0.75, c1: "rgba(29,185,84,0.32)", c2: "rgba(29,185,84,0)" },
+        { cx: 0.5, cy: 0.8, r: 0.7, c1: "rgba(155,89,182,0.22)", c2: "rgba(155,89,182,0)" }
+    ]
+];
+
 function initWrappedParticles() {
     const canvas = document.getElementById("wrapped-particles");
     if (!canvas) return;
@@ -215,7 +268,28 @@ function initWrappedParticles() {
     }
 
     function drawParticles() {
-        ctx.clearRect(0, 0, rect.width, rect.height);
+        // Draw deep cinematic base background
+        ctx.fillStyle = "#08070a";
+        ctx.fillRect(0, 0, rect.width, rect.height);
+
+        // Draw radial gradients on canvas
+        const grads = WRAPPED_CANVAS_GRADIENTS[wrappedSlideIndex] || WRAPPED_CANVAS_GRADIENTS[0];
+        if (grads) {
+            grads.forEach((g) => {
+                const cx = rect.width * g.cx;
+                const cy = rect.height * g.cy;
+                const r = Math.max(rect.width, rect.height) * g.r;
+                
+                const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+                grad.addColorStop(0, g.c1);
+                grad.addColorStop(1, g.c2);
+                
+                ctx.fillStyle = grad;
+                ctx.fillRect(0, 0, rect.width, rect.height);
+            });
+        }
+
+        // Draw ambient particles
         particles.forEach((p) => {
             ctx.beginPath();
             ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
@@ -474,7 +548,6 @@ function buildSlide9(topTrack, topArtists, totalPlays, minutesListened, uniqueTr
                     ? `<span class="icon-svg icon-plugin" style="background-color: var(--err, #ff5555); font-size: 0.75rem; vertical-align: middle;"></span> Simulated profile — listen more!` 
                     : `<span class="icon-svg icon-success" style="background-color: var(--accent); font-size: 0.75rem; vertical-align: middle;"></span> From your local play logs`}
             </p>
-            <button type="button" class="w-save-btn" onclick="alert('Wrapped card saved!')"><span class="icon-svg icon-save" style="margin-right: 6px;"></span> Save Wrapped Card</button>
         </div>
     </div>`;
 }
@@ -614,8 +687,7 @@ function animateSlide8(slide) {
 function animateSlide9(slide) {
     const tl = gsap.timeline();
     tl.to(slide.querySelector(".w-heading"), { opacity: 1, y: 0, duration: 0.5, ease: "power3.out" })
-      .to(slide.querySelector(".w-summary-grid"), { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, "-=0.2")
-      .to(slide.querySelector(".w-save-btn"), { opacity: 1, y: 0, duration: 0.4 }, "-=0.1");
+      .to(slide.querySelector(".w-summary-grid"), { opacity: 1, y: 0, duration: 0.6, ease: "power3.out" }, "-=0.2");
     return tl;
 }
 
@@ -1217,6 +1289,9 @@ async function exportWrappedSlidesToZip() {
         const slides = document.querySelectorAll(".wrapped-slide");
         if (slides.length === 0) throw new Error("No slides found");
         
+        const cardContainer = document.querySelector(".wrapped-card");
+        if (!cardContainer) throw new Error("Card container not found");
+        
         if (!window.JSZip) {
             throw new Error("JSZip library is not loaded. Check internet connection.");
         }
@@ -1235,9 +1310,37 @@ async function exportWrappedSlidesToZip() {
             transform: s.style.transform
         }));
 
+        const closeBtn = document.getElementById("wrapped-close-btn");
+        const btnPrev = document.getElementById("wrapped-btn-prev");
+        const btnNext = document.getElementById("wrapped-btn-next");
+        const prevTap = document.getElementById("wrapped-prev-tap");
+        const nextTap = document.getElementById("wrapped-next-tap");
+        const bottomBar = document.querySelector(".wrapped-bottom-bar");
+
+        const hideUI = () => {
+            if (closeBtn) closeBtn.style.display = "none";
+            if (btnPrev) btnPrev.style.display = "none";
+            if (btnNext) btnNext.style.display = "none";
+            if (prevTap) prevTap.style.display = "none";
+            if (nextTap) nextTap.style.display = "none";
+            if (bottomBar) bottomBar.style.display = "none";
+        };
+
+        const restoreUI = () => {
+            if (closeBtn) closeBtn.style.display = "";
+            if (btnPrev) btnPrev.style.display = "";
+            if (btnNext) btnNext.style.display = "";
+            if (prevTap) prevTap.style.display = "";
+            if (nextTap) nextTap.style.display = "";
+            if (bottomBar) bottomBar.style.display = "";
+        };
+
         for (let i = 0; i < slides.length; i++) {
             exportBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1.5s linear infinite;"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Slide ${i + 1}/10`;
             const slide = slides[i];
+            
+            // Set global index so canvas knows which gradient to render
+            wrappedSlideIndex = i;
             
             // Hide all slides
             slides.forEach(s => {
@@ -1265,16 +1368,22 @@ async function exportWrappedSlidesToZip() {
                 }
             }
             
+            // Hide interactive overlays
+            hideUI();
+            
             // Wait a brief frame for DOM updates
             await new Promise(resolve => setTimeout(resolve, 150));
             
-            // Capture canvas
-            const canvas = await window.html2canvas(slide, {
+            // Capture canvas of the entire card (background canvas + slide text + layouts)
+            const canvas = await window.html2canvas(cardContainer, {
                 backgroundColor: "#08070a",
                 scale: 2, // High resolution
                 logging: false,
                 useCORS: true
             });
+            
+            // Restore interactive overlays
+            restoreUI();
             
             // Clean up temporary timeline
             if (tempTL) {

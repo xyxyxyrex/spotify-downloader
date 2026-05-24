@@ -1,11 +1,11 @@
 {
-  "version": "0.3.4",
-  "notes": "High-fidelity 5-band Audio Equalizer inside Settings with pre-configured frequency presets (Bass Boost, Pop, Rock, Classical), smooth audio transitions, and persistent storage, along with fixes for Recently Played track context menus and downloads.",
-  "pub_date": "2026-05-24T17:15:00+08:00",
+  "version": "0.3.5",
+  "notes": "Immersive Stats & Fate Wrapped enhancements including dynamic genre footprint tracking, removal of inactive share/save buttons, high-performance canvas background rendering with high-resolution slide ZIP exports, and robust Deezer cover art match fallbacks.",
+  "pub_date": "2026-05-24T19:15:00+08:00",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHB0N3prMjl0Q1pTL2k3MHRvb2laWnFYRnc1aUNjTG52YmlweCtqRDhVRzVPbUFMN2ZveSttYWF4dmVySktISGtJV1ErdW5NeXI3Y1E3aFV3ZGhiK3d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NjE0OTY1CWZpbGU6U3BvdERMIEdVSV8wLjMuNF94NjQtc2V0dXAuZXhlCmgzSlZxdTdMTVFTa0NYZDltQ2Z0L09tdWN5bUZqcmdCazJkOFdoWEVFaUhHSnZNc2pZNVZ4ZC9EZmpMOHBPa3lnaytmOTlxUG1ONytseTdNTUxwREJRPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.4/SpotDL.GUI_0.3.4_x64-setup.exe"
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.5/SpotDL.GUI_0.3.5_x64-setup.exe"
     }
   }
 }
