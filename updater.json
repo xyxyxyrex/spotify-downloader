@@ -5,7 +5,7 @@
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHB0N3prMjl0Q1pTL2k3MHRvb2laWnFYRnc1aUNjTG52YmlweCtqRDhVRzVPbUFMN2ZveSttYWF4dmVySktISGtJV1ErdW5NeXI3Y1E3aFV3ZGhiK3d3PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NjE0OTY1CWZpbGU6U3BvdERMIEdVSV8wLjMuNF94NjQtc2V0dXAuZXhlCmgzSlZxdTdMTVFTa0NYZDltQ2Z0L09tdWN5bUZqcmdCazJkOFdoWEVFaUhHSnZNc2pZNVZ4ZC9EZmpMOHBPa3lnaytmOTlxUG1ONytseTdNTUxwREJRPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.4/SpotDL%20GUI_0.3.4_x64-setup.exe"
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.4/SpotDL.GUI_0.3.4_x64-setup.exe"
     }
   }
 }
