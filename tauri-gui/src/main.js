@@ -1864,8 +1864,9 @@ function setupNowPlayingContext() {
         if (!currentSong) return;
         e.preventDefault();
         e.stopPropagation();
-        selectedSong = currentSong;
-        refreshContextMenuForSong(selectedSong);
+        const selectionKey = getSongSelectionKey(currentSong);
+        setSingleSongSelection(currentSong, null, selectionKey);
+        refreshContextMenuForSong(currentSong);
         showContextMenuAt(e.clientX, e.clientY);
     });
 }
@@ -4372,6 +4373,9 @@ function createRecentlyPlayedCard(song) {
     card.type = "button";
     card.className = "collection-card song-card";
     card.dataset.songKey = songKey(song);
+    const selectionKey = getSongSelectionKey(song);
+    card.dataset.selectionKey = selectionKey;
+    card.classList.toggle("selected", isSelectionKeySelected(selectionKey));
     card.innerHTML = `
         <div class="collection-card-art" data-art></div>
         <div class="collection-card-body">
@@ -4398,7 +4402,23 @@ function createRecentlyPlayedCard(song) {
     makeSongDraggable(card, song);
 
     card.addEventListener("click", async () => {
+        const selKey = getSongSelectionKey(song);
+        setSingleSongSelection(song, card, selKey);
         await playSong(song);
+    });
+
+    card.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const selKey = getSongSelectionKey(song);
+        if (!isSelectionKeySelected(selKey)) {
+            setSingleSongSelection(song, card, selKey);
+        } else {
+            selectedSong = song;
+        }
+        selectedGroup = null;
+        refreshContextMenuForSong(song);
+        showContextMenuAt(e.clientX, e.clientY);
     });
 
     return card;
