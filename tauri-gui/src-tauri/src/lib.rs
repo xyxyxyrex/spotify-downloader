@@ -1551,14 +1551,65 @@ async fn fetch_lastfm(
     Ok(body)
 }
 
+fn clean_title(title: &str) -> String {
+    let mut cleaned = title.to_string();
+    let markers = [
+        " (feat.", " [feat.", " (feat ", " [feat ",
+        " (featuring", " [featuring",
+        " (with ", " [with ",
+        " (prod.", " [prod."
+    ];
+    
+    for marker in &markers {
+        if let Some(idx) = cleaned.to_lowercase().find(marker) {
+            cleaned.truncate(idx);
+        }
+    }
+    
+    cleaned.trim().to_string()
+}
+
+fn is_artist_match(query_artist: &str, result_artist: &str) -> bool {
+    let q = query_artist.to_lowercase();
+    let r = result_artist.to_lowercase();
+    
+    if q.contains(&r) || r.contains(&q) {
+        return true;
+    }
+    
+    let q_words: Vec<&str> = q.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .collect();
+        
+    let r_words: Vec<&str> = r.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 2)
+        .collect();
+        
+    if q_words.is_empty() || r_words.is_empty() {
+        return q == r || q.contains(&r) || r.contains(&q);
+    }
+        
+    for qw in &q_words {
+        for rw in &r_words {
+            if qw == rw {
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
 #[tauri::command]
 async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<String>, String> {
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
-    let query = format!("{} {}", artist, title);
+    
+    let cleaned_title = clean_title(&title);
+    let query = format!("{} {}", artist, cleaned_title);
     let url = format!(
-        "https://itunes.apple.com/search?term={}&entity=song&limit=1",
+        "https://itunes.apple.com/search?term={}&entity=song&limit=5",
         urlencoding::encode(&query)
     );
 
@@ -1575,7 +1626,23 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let art_url = data
+    let results = data.get("results")
+        .and_then(|r| r.as_array());
+
+    if let Some(tracks) = results {
+        for track in tracks {
+            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
+            
+            if is_artist_match(&artist, res_artist) {
+                if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
+                    return Ok(Some(art_url.to_string()));
+                }
+            }
+        }
+    }
+
+    // Fallback to first result if no artist matched
+    let first_art = data
         .get("results")
         .and_then(|r| r.as_array())
         .and_then(|a| a.first())
@@ -1583,7 +1650,7 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         .and_then(|u| u.as_str())
         .map(|u| u.to_string());
 
-    Ok(art_url)
+    Ok(first_art)
 }
 
 #[tauri::command]
@@ -1591,9 +1658,11 @@ async fn fetch_itunes_preview(artist: String, title: String) -> Result<Option<St
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
-    let query = format!("{} {}", artist, title);
+    
+    let cleaned_title = clean_title(&title);
+    let query = format!("{} {}", artist, cleaned_title);
     let url = format!(
-        "https://itunes.apple.com/search?term={}&entity=song&limit=1",
+        "https://itunes.apple.com/search?term={}&entity=song&limit=5",
         urlencoding::encode(&query)
     );
 
@@ -1610,7 +1679,23 @@ async fn fetch_itunes_preview(artist: String, title: String) -> Result<Option<St
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let preview_url = data
+    let results = data.get("results")
+        .and_then(|r| r.as_array());
+
+    if let Some(tracks) = results {
+        for track in tracks {
+            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
+            
+            if is_artist_match(&artist, res_artist) {
+                if let Some(preview_url) = track.get("previewUrl").and_then(|u| u.as_str()) {
+                    return Ok(Some(preview_url.to_string()));
+                }
+            }
+        }
+    }
+
+    // Fallback to first result if no artist matched
+    let first_preview = data
         .get("results")
         .and_then(|r| r.as_array())
         .and_then(|a| a.first())
@@ -1618,7 +1703,7 @@ async fn fetch_itunes_preview(artist: String, title: String) -> Result<Option<St
         .and_then(|u| u.as_str())
         .map(|u| u.to_string());
 
-    Ok(preview_url)
+    Ok(first_preview)
 }
 
 const YTDLP_AUDIO_FORMAT: &str = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio";
