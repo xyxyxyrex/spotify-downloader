@@ -2,8 +2,7 @@
 import { 
     refreshApiStatus, clearSongDownloadActivity, renderPlaylistSidebar, 
     applyTheme, showModal, 
-    apiStatus, refreshThemeOptions,
-    setEqualizerBandGain
+    apiStatus, refreshThemeOptions
 } from "../main.js";
 import { loadPlaylistsFromDisk, getPlaylists } from "../playlists.js";
 import { renderProfilePage } from "./profile.js";
@@ -638,7 +637,9 @@ export function setupSettings() {
             const gain = savedGain !== null ? parseFloat(savedGain) : 0;
             slider.value = gain;
             updateEqSliderLabel(freq, gain);
-            setEqualizerBandGain(freq, gain);
+            if (typeof window.setEqualizerBandGain === "function") {
+                window.setEqualizerBandGain(freq, gain);
+            }
         });
     }
 
@@ -659,7 +660,9 @@ export function setupSettings() {
             const gain = values[idx];
             slider.value = gain;
             updateEqSliderLabel(freq, gain);
-            setEqualizerBandGain(freq, gain);
+            if (typeof window.setEqualizerBandGain === "function") {
+                window.setEqualizerBandGain(freq, gain);
+            }
             localStorage.setItem(`spotdl_eq_gain_${freq}`, gain);
         });
         localStorage.setItem("spotdl_eq_preset", presetName);
@@ -671,7 +674,9 @@ export function setupSettings() {
             const freq = slider.dataset.freq;
             const gain = parseFloat(slider.value);
             updateEqSliderLabel(freq, gain);
-            setEqualizerBandGain(freq, gain);
+            if (typeof window.setEqualizerBandGain === "function") {
+                window.setEqualizerBandGain(freq, gain);
+            }
             localStorage.setItem(`spotdl_eq_gain_${freq}`, gain);
             
             localStorage.setItem("spotdl_eq_preset", "custom");

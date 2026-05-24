@@ -375,13 +375,10 @@ const EQ_TYPES = ["lowshelf", "peaking", "peaking", "peaking", "highshelf"];
 export function setEqualizerBandGain(freq, gain) {
     const filter = eqFilters.get(Number(freq));
     if (filter) {
-        if (audioContext) {
-            filter.gain.setTargetAtTime(gain, audioContext.currentTime, 0.01);
-        } else {
-            filter.gain.value = gain;
-        }
+        filter.gain.value = gain;
     }
 }
+window.setEqualizerBandGain = setEqualizerBandGain;
 
 let currentStreamData = null;
 let isPlaying = false;
@@ -3858,19 +3855,21 @@ function triggerRenamePlaylistFlow(playlistId) {
 }
 
 function initAudioVisualizer() {
-    if (visualizerInitialized) return;
+    if (visualizerInitialized && audioContext) return;
 
     const npContainer = document.querySelector(".now-playing");
-    if (!npContainer || document.getElementById("audio-visualizer")) return;
+    if (!npContainer) return;
 
-    const vizCanvas = document.createElement("canvas");
-    vizCanvas.id = "audio-visualizer";
-    vizCanvas.width = 60;
-    vizCanvas.height = 30;
-    vizCanvas.style.marginLeft = "15px";
-    vizCanvas.style.pointerEvents = "none";
-
-    npContainer.appendChild(vizCanvas);
+    let vizCanvas = document.getElementById("audio-visualizer");
+    if (!vizCanvas) {
+        vizCanvas = document.createElement("canvas");
+        vizCanvas.id = "audio-visualizer";
+        vizCanvas.width = 60;
+        vizCanvas.height = 30;
+        vizCanvas.style.marginLeft = "15px";
+        vizCanvas.style.pointerEvents = "none";
+        npContainer.appendChild(vizCanvas);
+    }
 
     try {
         if (!audioContext) {
