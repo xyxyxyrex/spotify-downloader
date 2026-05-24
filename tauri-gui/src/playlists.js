@@ -223,3 +223,16 @@ export function trackToSong(track) {
     playlist_track_id: track.id,
   };
 }
+
+export async function renamePlaylist(id, newName) {
+  if (isLikedPlaylist(id)) return;
+  const trimmed = newName.trim();
+  if (!trimmed || trimmed.toLowerCase() === "liked songs") {
+    throw new Error("That name is reserved.");
+  }
+  const pl = getPlaylist(id);
+  if (pl) {
+    pl.name = trimmed;
+    await persistPlaylists();
+  }
+}

@@ -177,7 +177,23 @@
                 </div>
 
                 <div id="view-search" class="view hidden">
-                    <h2>> Search Results</h2>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <h2 style="margin: 0;">> Search Results</h2>
+                    </div>
+
+                    <!-- Recent Searches Container -->
+                    <div id="recent-searches-container" class="recent-searches-container hidden">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                            <span style="font-size: 0.8rem; font-weight: 600; color: var(--fg-muted); letter-spacing: 0.05em; text-transform: uppercase;">Recent Searches</span>
+                            <button type="button" id="btn-clear-recent-searches" style="background: transparent; border: none; color: var(--accent); font-size: 0.8rem; cursor: pointer; padding: 4px 8px; border-radius: 4px; transition: background 0.2s;">
+                                Clear All
+                            </button>
+                        </div>
+                        <div id="recent-searches-list" style="display: flex; flex-wrap: wrap; gap: 8px;">
+                            <!-- Dynamic chips will be loaded here -->
+                        </div>
+                    </div>
+
                     <div id="search-results-list">
                         <span class="loading-text">Type in the search bar or paste a Spotify
                             playlist URL...</span>
@@ -208,13 +224,29 @@
                                 "></div>
                         <input type="file" id="playlist-art-file-input" accept="image/*" style="display: none;" />
                         <div style="flex: 1">
-                            <h2 id="playlist-view-title" style="
-                                        margin: 0;
-                                        font-size: 1.6rem;
-                                        font-weight: 700;
-                                    ">
-                                > Playlist
-                            </h2>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <h2 id="playlist-view-title" style="
+                                            margin: 0;
+                                            font-size: 1.6rem;
+                                            font-weight: 700;
+                                        ">
+                                    > Playlist
+                                </h2>
+                                <button type="button" id="playlist-rename-btn" class="secondary-btn" style="
+                                            padding: 4px 10px;
+                                            font-size: 0.78rem;
+                                            border-radius: 6px;
+                                            font-weight: 600;
+                                            cursor: pointer;
+                                            background: rgba(255,255,255,0.06);
+                                            border: 1px solid rgba(255,255,255,0.1);
+                                            color: var(--fg);
+                                            transition: all 0.2s;
+                                            display: none; /* Controlled dynamically by JS */
+                                        ">
+                                    Rename
+                                </button>
+                            </div>
                             <p id="playlist-view-meta" class="collection-subtitle" style="
                                         margin: 0;
                                         margin-top: 4px;
@@ -1259,6 +1291,7 @@
                     Download Group
                 </li>
                 <li id="cm-artist">View Artist</li>
+                <li id="cm-rename-playlist" class="hidden">Rename Playlist</li>
             </ul>
         </div>
 

@@ -23,6 +23,7 @@ import {
     isSongLiked,
     toggleLikedSong,
     getBestImage,
+    renamePlaylist,
 } from "./playlists.js";
 import {
     songKey,
@@ -65,6 +66,126 @@ import {
     syncLyricsPlayback,
 } from "./components/lyrics-sync.js";
 const { invoke, convertFileSrc } = window.__TAURI__.core;
+
+// Global Premium Glassmorphic Dialog Overrides (alert, confirm, prompt)
+function showCustomDialog({ type, message, defaultValue = "" }) {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.className = "custom-dialog-overlay";
+
+        const card = document.createElement("div");
+        card.className = "custom-dialog-card";
+
+        const header = document.createElement("div");
+        header.className = "custom-dialog-header";
+        header.innerHTML = `
+            <span class="custom-dialog-brand">spoti-tauri</span>
+            <span class="custom-dialog-type">${type}</span>
+        `;
+
+        const body = document.createElement("div");
+        body.className = "custom-dialog-body";
+        body.textContent = message;
+
+        let inputEl = null;
+        if (type === "prompt") {
+            inputEl = document.createElement("input");
+            inputEl.type = "text";
+            inputEl.className = "custom-dialog-input";
+            inputEl.value = defaultValue;
+            body.appendChild(inputEl);
+        }
+
+        const actions = document.createElement("div");
+        actions.className = "custom-dialog-actions";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.type = "button";
+        cancelBtn.className = "custom-dialog-btn secondary-btn";
+        cancelBtn.textContent = "Cancel";
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.type = "button";
+        confirmBtn.className = "custom-dialog-btn primary-btn";
+        confirmBtn.textContent = type === "alert" ? "OK" : "Confirm";
+
+        if (type === "confirm" || type === "prompt") {
+            actions.appendChild(cancelBtn);
+        }
+        actions.appendChild(confirmBtn);
+
+        card.appendChild(header);
+        card.appendChild(body);
+        card.appendChild(actions);
+        overlay.appendChild(card);
+        document.body.appendChild(overlay);
+
+        if (inputEl) {
+            setTimeout(() => {
+                inputEl.focus();
+                inputEl.select();
+            }, 50);
+        } else {
+            setTimeout(() => confirmBtn.focus(), 50);
+        }
+
+        const closeDialog = (value) => {
+            window.removeEventListener("keydown", keydownHandler);
+            overlay.classList.add("fade-out");
+            card.classList.add("scale-out");
+            setTimeout(() => {
+                overlay.remove();
+                resolve(value);
+            }, 200);
+        };
+
+        confirmBtn.addEventListener("click", () => {
+            if (type === "prompt") {
+                closeDialog(inputEl.value);
+            } else if (type === "confirm") {
+                closeDialog(true);
+            } else {
+                closeDialog(undefined);
+            }
+        });
+
+        cancelBtn.addEventListener("click", () => {
+            if (type === "prompt") {
+                closeDialog(null);
+            } else if (type === "confirm") {
+                closeDialog(false);
+            }
+        });
+
+        const keydownHandler = (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                confirmBtn.click();
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                if (type === "confirm" || type === "prompt") {
+                    cancelBtn.click();
+                } else {
+                    confirmBtn.click();
+                }
+            }
+        };
+
+        window.addEventListener("keydown", keydownHandler);
+    });
+}
+
+window.alert = function (message) {
+    showCustomDialog({ type: "alert", message });
+};
+
+window.confirm = function (message) {
+    return showCustomDialog({ type: "confirm", message });
+};
+
+window.prompt = function (message, defaultValue = "") {
+    return showCustomDialog({ type: "prompt", message, defaultValue });
+};
 
 // Memory Cache
 const memCache = new Map();
@@ -1587,6 +1708,7 @@ function refreshContextMenuForSong(song) {
     document.getElementById("cm-liked")?.classList.remove("hidden");
     document.getElementById("cm-playlist").classList.remove("hidden");
     document.getElementById("cm-artist").classList.remove("hidden");
+    document.getElementById("cm-rename-playlist")?.classList.add("hidden");
 }
 
 function refreshContextMenuForGroup(group) {
@@ -1598,6 +1720,14 @@ function refreshContextMenuForGroup(group) {
     document.getElementById("cm-liked")?.classList.add("hidden");
     document.getElementById("cm-playlist").classList.add("hidden");
     document.getElementById("cm-artist").classList.add("hidden");
+    document.getElementById("cm-remove-from-playlist")?.classList.add("hidden");
+
+    // Toggle Rename Playlist option
+    const renameCmItem = document.getElementById("cm-rename-playlist");
+    if (renameCmItem) {
+        const isUserPlaylist = group.type === "playlist" && !isLikedPlaylist(group.id);
+        renameCmItem.classList.toggle("hidden", !isUserPlaylist);
+    }
 }
 
 function getSongSelectionKey(song) {
@@ -3352,6 +3482,15 @@ async function checkAppUpdates() {
                         updateBtn.textContent = "Update failed (Retry)";
                         updateBtn.style.background = "#d32f2f";
                         updateBtn.style.color = "#fff";
+
+                        let detail = err?.message || String(err);
+                        let friendlyMsg = `Failed to install update: ${detail}`;
+                        if (detail.includes("404") || detail.toLowerCase().includes("not found")) {
+                            friendlyMsg = `Update download failed (404 Not Found).\nThe installer setup file is not available on the GitHub Release page yet or the release was not made public. Please try again in a few minutes.`;
+                        } else if (detail.toLowerCase().includes("signature") || detail.toLowerCase().includes("minisign") || detail.toLowerCase().includes("verify")) {
+                            friendlyMsg = `Update signature verification failed.\nThe downloaded package might be tampered with or is signed with a private key that does not match the configured public key.`;
+                        }
+                        alert(friendlyMsg);
                     }
                 });
             }
@@ -3642,6 +3781,7 @@ function setupNavigation() {
     navs.search.addEventListener("click", (e) => {
         e.preventDefault();
         switchView("search");
+        renderRecentSearches();
         searchInput.focus();
     });
     navs.settings?.addEventListener("click", async () => {
@@ -3663,6 +3803,41 @@ function setupNavigation() {
             switchView("profile");
             renderProfilePage();
         });
+
+    document.getElementById("playlist-rename-btn")?.addEventListener("click", () => {
+        const activeId = getActivePlaylistId();
+        if (activeId) {
+            triggerRenamePlaylistFlow(activeId);
+        }
+    });
+}
+
+function triggerRenamePlaylistFlow(playlistId) {
+    const pl = getPlaylist(playlistId);
+    if (!pl) return;
+
+    showModal(
+        "Rename Playlist",
+        `<p style="margin-bottom: 0.5rem; font-size: 1.05rem;">Enter a new name for <strong>${escapeHtml(pl.name)}</strong>:</p>
+         <input type="text" id="modal-playlist-rename-input" placeholder="New name..." value="${escapeHtml(pl.name)}" autocomplete="off">`,
+        async () => {
+            const input = document.getElementById("modal-playlist-rename-input");
+            const newName = input.value.trim();
+            if (!newName) return false;
+            try {
+                await renamePlaylist(playlistId, newName);
+                renderPlaylistSidebar();
+                if (getActivePlaylistId() === playlistId) {
+                    openPlaylistView(playlistId);
+                }
+                statusBar.textContent = `Playlist renamed to: ${newName}`;
+            } catch (err) {
+                alert(`Error: ${err.message}`);
+                return false;
+            }
+        },
+        "Rename",
+    );
 }
 
 function initAudioVisualizer() {
@@ -5312,11 +5487,98 @@ async function renderSpotifySearchResults(
         '<span class="loading-text">No Spotify results found.</span>';
 }
 
+const LOCAL_STORAGE_SEARCHES_KEY = "recent-search-queries";
+
+function getRecentSearches() {
+    try {
+        const data = localStorage.getItem(LOCAL_STORAGE_SEARCHES_KEY);
+        return data ? JSON.parse(data) : [];
+    } catch (e) {
+        console.error("Failed to parse recent searches:", e);
+        return [];
+    }
+}
+
+function saveSearchQuery(query) {
+    if (!query) return;
+    let searches = getRecentSearches();
+    searches = searches.filter(q => q.toLowerCase() !== query.toLowerCase());
+    searches.unshift(query);
+    if (searches.length > 10) {
+        searches.pop();
+    }
+    localStorage.setItem(LOCAL_STORAGE_SEARCHES_KEY, JSON.stringify(searches));
+    renderRecentSearches();
+}
+
+function deleteSearchQuery(query) {
+    let searches = getRecentSearches();
+    searches = searches.filter(q => q.toLowerCase() !== query.toLowerCase());
+    localStorage.setItem(LOCAL_STORAGE_SEARCHES_KEY, JSON.stringify(searches));
+    renderRecentSearches();
+}
+
+function clearAllSearchQueries() {
+    localStorage.removeItem(LOCAL_STORAGE_SEARCHES_KEY);
+    renderRecentSearches();
+}
+
+function renderRecentSearches() {
+    const container = document.getElementById("recent-searches-container");
+    const list = document.getElementById("recent-searches-list");
+    if (!container || !list) return;
+
+    const searches = getRecentSearches();
+    if (searches.length === 0) {
+        container.classList.add("hidden");
+        return;
+    }
+
+    container.classList.remove("hidden");
+    list.innerHTML = "";
+
+    searches.forEach(query => {
+        const chip = document.createElement("div");
+        chip.className = "recent-search-chip";
+        
+        const textSpan = document.createElement("span");
+        textSpan.className = "chip-text";
+        textSpan.textContent = query;
+        chip.appendChild(textSpan);
+        
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "chip-delete-btn";
+        delBtn.innerHTML = "&times;";
+        delBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            deleteSearchQuery(query);
+        });
+        chip.appendChild(delBtn);
+        
+        chip.addEventListener("click", () => {
+            searchInput.value = query;
+            const enterEvent = new KeyboardEvent("keydown", { key: "Enter" });
+            searchInput.dispatchEvent(enterEvent);
+        });
+        
+        list.appendChild(chip);
+    });
+}
+
 function setupSearch() {
+    document.getElementById("btn-clear-recent-searches")?.addEventListener("click", () => {
+        clearAllSearchQueries();
+    });
+
+    renderRecentSearches();
+
     searchInput.addEventListener("keydown", async (e) => {
         if (e.key !== "Enter") return;
         const query = searchInput.value.trim();
         if (!query) return;
+
+        saveSearchQuery(query);
 
         await refreshApiStatus();
         navs.search.click();
@@ -6572,6 +6834,11 @@ function setupContextMenu() {
             openArtistPage(selectedSong.artist);
         }
     });
+    document.getElementById("cm-rename-playlist")?.addEventListener("click", () => {
+        if (selectedGroup && selectedGroup.type === "playlist" && selectedGroup.id) {
+            triggerRenamePlaylistFlow(selectedGroup.id);
+        }
+    });
 }
 
 function formatTime(seconds) {
@@ -6828,6 +7095,7 @@ export function renderPlaylistSidebar() {
             e.stopPropagation();
             selectedGroup = {
                 type: "playlist",
+                id: pl.id,
                 name: pl.name,
                 fetchTracks: async () => pl.tracks.map(trackToSong),
             };
@@ -6837,7 +7105,7 @@ export function renderPlaylistSidebar() {
 
         const artThumb = document.createElement("div");
         artThumb.className = "pl-sidebar-art-thumb";
-        renderPlaylistArt(pl, artThumb, 24);
+        renderPlaylistArt(pl, artThumb, 36);
         li.appendChild(artThumb);
         li.appendChild(label);
         if (!isLikedPlaylist(pl.id)) {
@@ -6881,6 +7149,11 @@ async function openPlaylistView(playlistId) {
     document.getElementById("playlist-view-title").textContent = `> ${pl.name}`;
     document.getElementById("playlist-view-meta").textContent =
         `${pl.tracks.length} tracks · ${formatDuration(totalSecs) || "0:00"} total`;
+
+    const renameBtn = document.getElementById("playlist-rename-btn");
+    if (renameBtn) {
+        renameBtn.style.display = isLikedPlaylist(playlistId) ? "none" : "";
+    }
 
     const headerArtEl = document.getElementById("playlist-view-art");
     if (headerArtEl) {
@@ -7353,7 +7626,10 @@ export function showModal(
     };
 
     const handleConfirm = async () => {
-        const result = await onConfirm();
+        let result;
+        if (typeof onConfirm === "function") {
+            result = await onConfirm();
+        }
         if (result !== false) cleanup(false);
     };
 
@@ -8529,6 +8805,86 @@ if (document.readyState === "loading") {
 // ============================================================================
 // --- Spoti-Tauri Plugin Store SDK & Sandbox Loader (v0.2.9) ---
 // ============================================================================
+// Plugin Persistence Utilities
+const LOCAL_STORAGE_PLUGINS_KEY = "installed-marketplace-plugins";
+
+function getInstalledPluginsFromStorage() {
+    try {
+        const data = localStorage.getItem(LOCAL_STORAGE_PLUGINS_KEY);
+        return data ? JSON.parse(data) : [];
+    } catch (e) {
+        console.error("Failed to parse installed plugins from localStorage:", e);
+        return [];
+    }
+}
+
+function savePluginToStorage(pluginMeta) {
+    if (!pluginMeta || !pluginMeta.id || !pluginMeta.url) return;
+    const plugins = getInstalledPluginsFromStorage();
+    if (!plugins.some(p => p.id === pluginMeta.id)) {
+        plugins.push({
+            id: pluginMeta.id,
+            name: pluginMeta.name,
+            url: pluginMeta.url,
+            icon: pluginMeta.icon,
+            description: pluginMeta.description,
+            lastUpdated: pluginMeta.lastUpdated,
+            downloads: pluginMeta.downloads
+        });
+        localStorage.setItem(LOCAL_STORAGE_PLUGINS_KEY, JSON.stringify(plugins));
+    }
+}
+
+function removePluginFromStorage(pluginId) {
+    let plugins = getInstalledPluginsFromStorage();
+    plugins = plugins.filter(p => p.id !== pluginId);
+    localStorage.setItem(LOCAL_STORAGE_PLUGINS_KEY, JSON.stringify(plugins));
+}
+
+async function loadPluginScript(pluginMeta, onComplete = null, onFailure = null) {
+    try {
+        const scriptRes = await fetch(pluginMeta.url);
+        if (!scriptRes.ok) {
+            throw new Error(`Failed to download: HTTP ${scriptRes.status}`);
+        }
+        const code = await scriptRes.text();
+
+        const script = document.createElement("script");
+        script.type = "module";
+        const blob = new Blob([code], {
+            type: "application/javascript",
+        });
+        const url = URL.createObjectURL(blob);
+        script.src = url;
+
+        script.onload = () => {
+            URL.revokeObjectURL(url);
+            if (onComplete) onComplete();
+        };
+        script.onerror = (err) => {
+            URL.revokeObjectURL(url);
+            console.error("Plugin loading error:", err);
+            if (onFailure) onFailure(new Error("The script contains syntax errors. See devtools."));
+        };
+
+        document.body.appendChild(script);
+    } catch (err) {
+        console.error("Installation/loading failed:", err);
+        if (onFailure) onFailure(err);
+    }
+}
+
+async function loadInstalledPluginsFromStorage() {
+    const plugins = getInstalledPluginsFromStorage();
+    for (const p of plugins) {
+        try {
+            await loadPluginScript(p);
+        } catch (err) {
+            console.error(`Failed to load persisted plugin ${p.id} on startup:`, err);
+        }
+    }
+}
+
 window.spotiTauri = {
     getCurrentSong: () =>
         currentSong ? JSON.parse(JSON.stringify(currentSong)) : null,
@@ -8723,6 +9079,20 @@ window.spotiTauri = {
                 card.style.transform = "scale(0.95)";
                 setTimeout(() => {
                     card.remove();
+                    removePluginFromStorage(meta.id);
+
+                    // INSTANTLY RESTORE TO MARKETPLACE
+                    const pluginMeta = cachedMarketplaceRegistry.find(p => p.id === meta.id);
+                    if (pluginMeta) {
+                        const pluginsGrid = document.getElementById("plugins-grid");
+                        if (pluginsGrid) {
+                            if (!document.querySelector(`#plugins-grid .plugin-card[data-plugin-id="${meta.id}"]`)) {
+                                const marketCard = createMarketplaceCard(pluginMeta);
+                                pluginsGrid.appendChild(marketCard);
+                            }
+                        }
+                    }
+
                     window.spotiTauri.showStatus(
                         `Plugin "${meta.name}" uninstalled.`,
                     );
@@ -8735,8 +9105,83 @@ window.spotiTauri = {
     },
 };
 
+let cachedMarketplaceRegistry = [];
+
+function createMarketplaceCard(pluginMeta) {
+    const card = document.createElement("div");
+    card.className = "plugin-card";
+    card.setAttribute("data-plugin-id", pluginMeta.id);
+    card.style.cssText = `
+        background: rgba(255, 255, 255, 0.03); 
+        border: 1px solid rgba(255, 255, 255, 0.08); 
+        border-radius: 12px; 
+        padding: 20px; 
+        display: flex; 
+        flex-direction: column; 
+        gap: 15px; 
+        transition: all 0.3s ease; 
+        box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
+        position: relative; 
+        overflow: hidden;
+    `;
+
+    const icon = pluginMeta.icon || "🔌";
+    const description = pluginMeta.description || "No description provided.";
+    const lastUpdated = pluginMeta.lastUpdated || "N/A";
+    const downloads = pluginMeta.downloads != null ? pluginMeta.downloads : 0;
+    const downloadsStr = downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
+
+    let iconHtml = "";
+    if (!pluginMeta.icon || pluginMeta.icon === "🔌") {
+        iconHtml = `<span class="icon-svg icon-plugin" style="font-size: 1.8rem; background-color: var(--accent);"></span>`;
+    } else {
+        iconHtml = `<span style="font-size: 1.8rem;">${pluginMeta.icon}</span>`;
+    }
+
+    card.innerHTML = `
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+            ${iconHtml}
+            <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
+                <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
+                    ${downloadsStr} downloads
+                </span>
+                <span style="color: var(--fg-muted); font-size: 0.65rem; opacity: 0.8;">
+                    Updated: ${lastUpdated}
+                </span>
+            </div>
+        </div>
+        <div>
+            <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">${pluginMeta.name}</h3>
+            <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">${description}</p>
+        </div>
+        <div style="margin-top: auto; display: flex; gap: 10px;">
+            <button type="button" class="btn-secondary" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; width: 100%; cursor: pointer;">
+                Install
+            </button>
+        </div>
+    `;
+
+    const installBtn = card.querySelector("button");
+    installBtn.addEventListener("click", async (e) => {
+        e.preventDefault();
+        installBtn.textContent = "Installing...";
+        installBtn.disabled = true;
+
+        await loadPluginScript(pluginMeta, () => {
+            savePluginToStorage(pluginMeta);
+        }, (err) => {
+            alert(`Installation failed: ${err.message}`);
+            installBtn.textContent = "Install";
+            installBtn.disabled = false;
+        });
+    });
+
+    return card;
+}
+
 function initPluginStoreEvents() {
     fetchMarketplacePlugins();
+    loadInstalledPluginsFromStorage();
 }
 
 async function fetchMarketplacePlugins() {
@@ -8754,6 +9199,7 @@ async function fetchMarketplacePlugins() {
             throw new Error(`HTTP ${response.status}`);
         }
         const plugins = await response.json();
+        cachedMarketplaceRegistry = plugins;
 
         if (emptyMsg) emptyMsg.style.display = "none";
 
@@ -8773,107 +9219,7 @@ async function fetchMarketplacePlugins() {
             )
                 return;
 
-            const card = document.createElement("div");
-            card.className = "plugin-card";
-            card.setAttribute("data-plugin-id", pluginMeta.id);
-            card.style.cssText = `
-                background: rgba(255, 255, 255, 0.03); 
-                border: 1px solid rgba(255, 255, 255, 0.08); 
-                border-radius: 12px; 
-                padding: 20px; 
-                display: flex; 
-                flex-direction: column; 
-                gap: 15px; 
-                transition: all 0.3s ease; 
-                box-shadow: 0 4px 20px rgba(0,0,0,0.2); 
-                position: relative; 
-                overflow: hidden;
-            `;
-
-            const icon = pluginMeta.icon || "🔌";
-            const description =
-                pluginMeta.description || "No description provided.";
-            const lastUpdated = pluginMeta.lastUpdated || "N/A";
-            const downloads =
-                pluginMeta.downloads != null ? pluginMeta.downloads : 0;
-            const downloadsStr =
-                downloads >= 1000
-                    ? `${(downloads / 1000).toFixed(1)}k`
-                    : downloads;
-
-            let iconHtml = "";
-            if (!pluginMeta.icon || pluginMeta.icon === "🔌") {
-                iconHtml = `<span class="icon-svg icon-plugin" style="font-size: 1.8rem; background-color: var(--accent);"></span>`;
-            } else {
-                iconHtml = `<span style="font-size: 1.8rem;">${pluginMeta.icon}</span>`;
-            }
-
-            card.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: space-between;">
-                    ${iconHtml}
-                    <div style="text-align: right; display: flex; flex-direction: column; gap: 2px;">
-                        <span style="background: rgba(255, 255, 255, 0.08); color: var(--fg-muted); font-size: 0.72rem; font-weight: 700; padding: 4px 10px; border-radius: 20px;">
-                            ${downloadsStr} downloads
-                        </span>
-                        <span style="color: var(--fg-muted); font-size: 0.65rem; opacity: 0.8;">
-                            Updated: ${lastUpdated}
-                        </span>
-                    </div>
-                </div>
-                <div>
-                    <h3 style="font-size: 1.25rem; font-weight: 700; margin: 0 0 6px 0; color: #fff;">${pluginMeta.name}</h3>
-                    <p style="color: var(--fg-muted); font-size: 0.88rem; line-height: 1.45; margin: 0;">${description}</p>
-                </div>
-                <div style="margin-top: auto; display: flex; gap: 10px;">
-                    <button type="button" class="btn-secondary" style="flex: 1; padding: 10px; border-radius: 6px; font-weight: 600; font-size: 0.88rem; display: flex; justify-content: center; width: 100%; cursor: pointer;">
-                        Install
-                    </button>
-                </div>
-            `;
-
-            const installBtn = card.querySelector("button");
-            installBtn.addEventListener("click", async (e) => {
-                e.preventDefault();
-                installBtn.textContent = "Installing...";
-                installBtn.disabled = true;
-
-                try {
-                    const scriptRes = await fetch(pluginMeta.url);
-                    if (!scriptRes.ok) {
-                        throw new Error(
-                            `Failed to download: HTTP ${scriptRes.status}`,
-                        );
-                    }
-                    const code = await scriptRes.text();
-
-                    const script = document.createElement("script");
-                    script.type = "module";
-                    const blob = new Blob([code], {
-                        type: "application/javascript",
-                    });
-                    const url = URL.createObjectURL(blob);
-                    script.src = url;
-
-                    script.onload = () => URL.revokeObjectURL(url);
-                    script.onerror = (err) => {
-                        URL.revokeObjectURL(url);
-                        console.error("Plugin loading error:", err);
-                        alert(
-                            "Evaluation Error: The script contains syntax errors. See devtools.",
-                        );
-                        installBtn.textContent = "Install";
-                        installBtn.disabled = false;
-                    };
-
-                    document.body.appendChild(script);
-                } catch (err) {
-                    console.error("Installation failed:", err);
-                    alert(`Installation failed: ${err.message}`);
-                    installBtn.textContent = "Install";
-                    installBtn.disabled = false;
-                }
-            });
-
+            const card = createMarketplaceCard(pluginMeta);
             pluginsGrid.appendChild(card);
         });
     } catch (err) {
