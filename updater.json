@@ -1,7 +1,7 @@
 {
-  "version": "0.3.3",
-  "notes": "Premium glassmorphic error dialog overrides for the updater, robust automatic signature checking, custom playlist rename context-menus, and persistent search query history.",
-  "pub_date": "2026-05-24T08:48:00+08:00",
+  "version": "0.3.4",
+  "notes": "High-fidelity 5-band Audio Equalizer inside Settings with pre-configured frequency presets (Bass Boost, Pop, Rock, Classical), smooth audio transitions, and persistent storage, along with fixes for Recently Played track context menus and downloads.",
+  "pub_date": "2026-05-24T17:15:00+08:00",
   "platforms": {
     "windows-x86_64": {
       "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHVwUUdRZFhoc001QTJqREFwcXZpWkswbXNuS1Bhb01LcXgveVJWYWhNMitmakZ1U1kreTlwVFhyOTl2cyt6WG41cWNhM2VYR0M5SXBhZEdPczcwTFFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NTg0NDkyCWZpbGU6U3BvdERMIEdVSV8wLjMuM194NjQtc2V0dXAuZXhlCmNya0FSVitCTnVOYjhGcUtKNXMzaDZXbDY2Uy9DUWE5UzQrNXA1QzVXTTNHWFNRcXJIQkpIZnJCSWFDUlpCOWJDMVBxb3R4V1NiODFHeUVTVkVwWEFRPT0K",

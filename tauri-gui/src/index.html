@@ -699,6 +699,143 @@
                         </div>
                         <p id="settings-status" class="settings-status"></p>
 
+                        <!-- Audio Equalizer Section -->
+                        <div class="settings-row" style="
+                                    margin-top: 2rem;
+                                    border-top: 1px solid var(--border);
+                                    padding-top: 1.5rem;
+                                ">
+                            <h3 style="
+                                        margin-bottom: 0.5rem;
+                                        color: var(--fg);
+                                        font-size: 1.1rem;
+                                    ">
+                                Audio Equalizer
+                            </h3>
+                            <p class="settings-hint" style="margin-bottom: 1.2rem">
+                                Shape your music frequency response. Presets or slider changes apply immediately.
+                            </p>
+
+                            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+                                <label for="eq-preset-select" style="font-size: 0.88rem; color: var(--fg-muted);">Preset:</label>
+                                <select id="eq-preset-select" style="
+                                            padding: 8px 12px;
+                                            background: var(--bg-hover);
+                                            color: var(--fg);
+                                            border: 1px solid var(--border);
+                                            border-radius: 6px;
+                                            font-size: 0.9rem;
+                                            cursor: pointer;
+                                            min-width: 140px;
+                                        ">
+                                    <option value="flat">Flat (Default)</option>
+                                    <option value="bass-boost">Bass Boost</option>
+                                    <option value="vocal-boost">Vocal Boost</option>
+                                    <option value="electronic">Electronic</option>
+                                    <option value="pop">Pop</option>
+                                    <option value="rock">Rock</option>
+                                    <option value="classical">Classical</option>
+                                    <option value="custom" disabled>Custom</option>
+                                </select>
+                                <button type="button" id="btn-reset-eq" class="btn-secondary" style="padding: 8px 14px; font-size: 0.85rem; border-radius: 6px; cursor: pointer; height: 36px; line-height: 1;">
+                                    Reset to Flat
+                                </button>
+                            </div>
+
+                            <!-- Equalizer Sliders Container -->
+                            <div style="
+                                        display: flex;
+                                        justify-content: space-between;
+                                        align-items: center;
+                                        background: rgba(255,255,255,0.02);
+                                        border: 1px solid var(--border);
+                                        border-radius: 10px;
+                                        padding: 20px;
+                                        gap: 15px;
+                                    ">
+                                <!-- 60 Hz -->
+                                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; gap: 10px;">
+                                    <span style="font-size: 0.75rem; color: var(--fg-muted); font-weight: bold;">60Hz</span>
+                                    <div style="height: 150px; display: flex; align-items: center; justify-content: center;">
+                                        <input type="range" class="eq-slider" data-freq="60" min="-12" max="12" step="0.5" value="0" style="
+                                            writing-mode: vertical-lr;
+                                            direction: rtl;
+                                            height: 130px;
+                                            width: 8px;
+                                            accent-color: var(--accent);
+                                            cursor: pointer;
+                                            margin: 0;
+                                        " />
+                                    </div>
+                                    <span id="eq-val-60" style="font-size: 0.75rem; font-family: monospace; color: var(--accent);">0dB</span>
+                                </div>
+                                <!-- 230 Hz -->
+                                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; gap: 10px;">
+                                    <span style="font-size: 0.75rem; color: var(--fg-muted); font-weight: bold;">230Hz</span>
+                                    <div style="height: 150px; display: flex; align-items: center; justify-content: center;">
+                                        <input type="range" class="eq-slider" data-freq="230" min="-12" max="12" step="0.5" value="0" style="
+                                            writing-mode: vertical-lr;
+                                            direction: rtl;
+                                            height: 130px;
+                                            width: 8px;
+                                            accent-color: var(--accent);
+                                            cursor: pointer;
+                                            margin: 0;
+                                        " />
+                                    </div>
+                                    <span id="eq-val-230" style="font-size: 0.75rem; font-family: monospace; color: var(--accent);">0dB</span>
+                                </div>
+                                <!-- 910 Hz -->
+                                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; gap: 10px;">
+                                    <span style="font-size: 0.75rem; color: var(--fg-muted); font-weight: bold;">910Hz</span>
+                                    <div style="height: 150px; display: flex; align-items: center; justify-content: center;">
+                                        <input type="range" class="eq-slider" data-freq="910" min="-12" max="12" step="0.5" value="0" style="
+                                            writing-mode: vertical-lr;
+                                            direction: rtl;
+                                            height: 130px;
+                                            width: 8px;
+                                            accent-color: var(--accent);
+                                            cursor: pointer;
+                                            margin: 0;
+                                        " />
+                                    </div>
+                                    <span id="eq-val-910" style="font-size: 0.75rem; font-family: monospace; color: var(--accent);">0dB</span>
+                                </div>
+                                <!-- 4 kHz -->
+                                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; gap: 10px;">
+                                    <span style="font-size: 0.75rem; color: var(--fg-muted); font-weight: bold;">4kHz</span>
+                                    <div style="height: 150px; display: flex; align-items: center; justify-content: center;">
+                                        <input type="range" class="eq-slider" data-freq="4000" min="-12" max="12" step="0.5" value="0" style="
+                                            writing-mode: vertical-lr;
+                                            direction: rtl;
+                                            height: 130px;
+                                            width: 8px;
+                                            accent-color: var(--accent);
+                                            cursor: pointer;
+                                            margin: 0;
+                                        " />
+                                    </div>
+                                    <span id="eq-val-4000" style="font-size: 0.75rem; font-family: monospace; color: var(--accent);">0dB</span>
+                                </div>
+                                <!-- 14 kHz -->
+                                <div style="display: flex; flex-direction: column; align-items: center; flex: 1; gap: 10px;">
+                                    <span style="font-size: 0.75rem; color: var(--fg-muted); font-weight: bold;">14kHz</span>
+                                    <div style="height: 150px; display: flex; align-items: center; justify-content: center;">
+                                        <input type="range" class="eq-slider" data-freq="14000" min="-12" max="12" step="0.5" value="0" style="
+                                            writing-mode: vertical-lr;
+                                            direction: rtl;
+                                            height: 130px;
+                                            width: 8px;
+                                            accent-color: var(--accent);
+                                            cursor: pointer;
+                                            margin: 0;
+                                        " />
+                                    </div>
+                                    <span id="eq-val-14000" style="font-size: 0.75rem; font-family: monospace; color: var(--accent);">0dB</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Danger Zone -->
                         <div class="settings-row" style="
                                     margin-top: 2rem;

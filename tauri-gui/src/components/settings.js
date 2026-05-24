@@ -2,7 +2,8 @@
 import { 
     refreshApiStatus, clearSongDownloadActivity, renderPlaylistSidebar, 
     applyTheme, showModal, 
-    apiStatus, refreshThemeOptions
+    apiStatus, refreshThemeOptions,
+    setEqualizerBandGain
 } from "../main.js";
 import { loadPlaylistsFromDisk, getPlaylists } from "../playlists.js";
 import { renderProfilePage } from "./profile.js";
@@ -611,6 +612,86 @@ export function setupSettings() {
             "Wipe Everything"
         );
     });
+
+    // ── AUDIO EQUALIZER UI LOGIC ──────────────────────────────────────────
+    const eqPresetSelect = document.getElementById("eq-preset-select");
+    const btnResetEq = document.getElementById("btn-reset-eq");
+    const eqSliders = document.querySelectorAll(".eq-slider");
+
+    const eqPresets = {
+        "flat": [0, 0, 0, 0, 0],
+        "bass-boost": [5, 3.5, 1, 0, 0],
+        "vocal-boost": [-2, -1, 3, 4, 1.5],
+        "electronic": [4, 2.5, -1, 2, 3],
+        "pop": [-1.5, 2, 0, 1.5, -1],
+        "rock": [3.5, 1.5, -1, 2.5, 4],
+        "classical": [3, 2, 0, 2, 3.5]
+    };
+
+    function loadEqFromStorage() {
+        const savedPreset = localStorage.getItem("spotdl_eq_preset") || "flat";
+        if (eqPresetSelect) eqPresetSelect.value = savedPreset;
+
+        eqSliders.forEach((slider) => {
+            const freq = slider.dataset.freq;
+            const savedGain = localStorage.getItem(`spotdl_eq_gain_${freq}`);
+            const gain = savedGain !== null ? parseFloat(savedGain) : 0;
+            slider.value = gain;
+            updateEqSliderLabel(freq, gain);
+            setEqualizerBandGain(freq, gain);
+        });
+    }
+
+    function updateEqSliderLabel(freq, gain) {
+        const label = document.getElementById(`eq-val-${freq}`);
+        if (label) {
+            const sign = gain > 0 ? "+" : "";
+            label.textContent = `${sign}${gain}dB`;
+        }
+    }
+
+    function applyPreset(presetName) {
+        const values = eqPresets[presetName];
+        if (!values) return;
+
+        eqSliders.forEach((slider, idx) => {
+            const freq = slider.dataset.freq;
+            const gain = values[idx];
+            slider.value = gain;
+            updateEqSliderLabel(freq, gain);
+            setEqualizerBandGain(freq, gain);
+            localStorage.setItem(`spotdl_eq_gain_${freq}`, gain);
+        });
+        localStorage.setItem("spotdl_eq_preset", presetName);
+        if (eqPresetSelect) eqPresetSelect.value = presetName;
+    }
+
+    eqSliders.forEach((slider) => {
+        slider.addEventListener("input", () => {
+            const freq = slider.dataset.freq;
+            const gain = parseFloat(slider.value);
+            updateEqSliderLabel(freq, gain);
+            setEqualizerBandGain(freq, gain);
+            localStorage.setItem(`spotdl_eq_gain_${freq}`, gain);
+            
+            localStorage.setItem("spotdl_eq_preset", "custom");
+            if (eqPresetSelect) eqPresetSelect.value = "custom";
+        });
+    });
+
+    eqPresetSelect?.addEventListener("change", () => {
+        const val = eqPresetSelect.value;
+        if (val !== "custom") {
+            applyPreset(val);
+        }
+    });
+
+    btnResetEq?.addEventListener("click", () => {
+        applyPreset("flat");
+    });
+
+    // Initialize EQ state
+    loadEqFromStorage();
 }
 
 export function setSettingsStatus(msg, kind) {

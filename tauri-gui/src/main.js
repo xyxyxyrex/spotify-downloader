@@ -367,6 +367,22 @@ let analyser = null;
 let dataArray = null;
 let visualizerInitialized = false;
 
+// Audio Equalizer State and Variables
+const eqFilters = new Map();
+const EQ_BANDS = [60, 230, 910, 4000, 14000];
+const EQ_TYPES = ["lowshelf", "peaking", "peaking", "peaking", "highshelf"];
+
+export function setEqualizerBandGain(freq, gain) {
+    const filter = eqFilters.get(Number(freq));
+    if (filter) {
+        if (audioContext) {
+            filter.gain.setTargetAtTime(gain, audioContext.currentTime, 0.01);
+        } else {
+            filter.gain.value = gain;
+        }
+    }
+}
+
 let currentStreamData = null;
 let isPlaying = false;
 let currentSong = null;
@@ -3863,7 +3879,25 @@ function initAudioVisualizer() {
             )();
             analyser = audioContext.createAnalyser();
             const source = audioContext.createMediaElementSource(audioPlayer);
-            source.connect(analyser);
+            
+            // Connect through Equalizer filter chain
+            let lastNode = source;
+            eqFilters.clear();
+            EQ_BANDS.forEach((freq, idx) => {
+                const filter = audioContext.createBiquadFilter();
+                filter.type = EQ_TYPES[idx];
+                filter.frequency.value = freq;
+                
+                // Load gain value from localStorage or default to 0
+                const saved = localStorage.getItem(`spotdl_eq_gain_${freq}`);
+                filter.gain.value = saved !== null ? parseFloat(saved) : 0;
+                
+                eqFilters.set(freq, filter);
+                lastNode.connect(filter);
+                lastNode = filter;
+            });
+            
+            lastNode.connect(analyser);
             analyser.connect(audioContext.destination);
             analyser.fftSize = 64;
         }
