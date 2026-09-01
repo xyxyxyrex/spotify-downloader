@@ -1,11 +1,11 @@
 {
-  "version": "0.3.5",
-  "notes": "Release notes and binaries for version v0.3.5.",
-  "pub_date": "2026-05-24T11:30:22.527Z",
+  "version": "0.3.6",
+  "notes": "Release notes and binaries for version v0.3.6.",
+  "pub_date": "2026-09-01T06:29:51.145Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MGhHL1Z3a2RrTXZzcDFINHA2b0FvZ2xSR1owYmY0V0VTMkZmbVQ2V0lFWDNCN0VDQlhkR2hOWnJYb0IxZlMyWGsxM0JSTDhlNFdjekJXN3FqMDNnTHdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzc5NjIyMjEyCWZpbGU6U3BvdERMIEdVSV8wLjMuNV94NjQtc2V0dXAuZXhlCnk3cWptM2Zha1NYeXU4MG1rRDQwSGpPWEdXQkNuYmRyNjY2Y05Jc2daYXBPVUxMYVZrM0RIK2wzOEd0MDczN3VKMUFSYk1JNnI2U01jWkFJT2FEckFBPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.5/SpotDL.GUI_0.3.5_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MG9WdGo4bEM3SlZKTkpuRzNEM1BpNmpzNmFuTEI1WExycUxSU2Z4cTZGblg5NTFuNDF0WGhxREp6bzQ5NGlCeGtIaGwyQjZVUzNTQm9jS2h0WUdKdXc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjQ0MTgwCWZpbGU6U3BvdERMIEdVSV8wLjMuNl94NjQtc2V0dXAuZXhlCmhkRURuYlJlT2hJOE5jM1FlT3BnaWdNZDRXUUY2U2xaUkIrQUsvZmRPOTdUNG1ZTUJoemRJbGFwZmhqc2ZVNnZUcFJNUnhjakx0RDd5MG55V2FvUkNnPT0K",
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.6/SpotDL.GUI_0.3.6_x64-setup.exe"
     }
   }
 }

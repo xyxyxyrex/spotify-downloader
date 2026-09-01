@@ -55,19 +55,6 @@ if (!nsis?.url || !nsis?.signature) {
     throw new Error("Release manifest does not contain a Windows x64 NSIS updater");
 }
 
-const url = new URL(nsis.url);
-if (url.protocol !== "https:" || url.hostname !== "github.com") {
-    throw new Error(`Unexpected updater host: ${url.origin}`);
-}
-if (!url.pathname.includes(`/releases/download/v${expectedVersion}/`)) {
-    throw new Error(`Updater URL does not point to release v${expectedVersion}`);
-}
-
-const installerName = decodeURIComponent(path.posix.basename(url.pathname));
-if (!installerName.endsWith("_x64-setup.exe")) {
-    throw new Error(`Unexpected NSIS installer filename: ${installerName}`);
-}
-
 const publicText = decodeMinisignText(
     tauriConfig.plugins?.updater?.pubkey || "",
     "Updater public key",
@@ -87,6 +74,55 @@ const trustedComment = signature.lines.find((line) =>
     line.startsWith("trusted comment:"),
 );
 const signedFile = trustedComment?.match(/\bfile:(.+)$/)?.[1]?.trim();
+if (!signedFile?.endsWith("_x64-setup.exe")) {
+    throw new Error(`Unexpected signed NSIS installer filename: ${signedFile}`);
+}
+
+const url = new URL(nsis.url);
+let installerName;
+let legacyUrl;
+if (url.protocol === "https:" && url.hostname === "github.com") {
+    if (!url.pathname.includes(`/releases/download/v${expectedVersion}/`)) {
+        throw new Error(`Updater URL does not point to release v${expectedVersion}`);
+    }
+    installerName = decodeURIComponent(path.posix.basename(url.pathname));
+    legacyUrl = url.toString();
+} else if (
+    url.protocol === "https:" &&
+    url.hostname === "api.github.com" &&
+    /^\/repos\/xyxyxyrex\/spotify-downloader\/releases\/assets\/\d+$/.test(
+        url.pathname,
+    )
+) {
+    const headers = {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "spotdl-updater-manifest-validator",
+    };
+    if (process.env.GH_TOKEN) {
+        headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+        throw new Error(`Unable to resolve GitHub release asset: HTTP ${response.status}`);
+    }
+    const asset = await response.json();
+    installerName = asset.name;
+    legacyUrl = asset.browser_download_url;
+    const browserUrl = new URL(legacyUrl);
+    if (
+        browserUrl.protocol !== "https:" ||
+        browserUrl.hostname !== "github.com" ||
+        !browserUrl.pathname.includes(`/releases/download/v${expectedVersion}/`)
+    ) {
+        throw new Error(`Release asset does not belong to v${expectedVersion}`);
+    }
+} else {
+    throw new Error(`Unexpected updater URL: ${url.origin}${url.pathname}`);
+}
+
+if (!installerName?.endsWith("_x64-setup.exe")) {
+    throw new Error(`Unexpected NSIS installer filename: ${installerName}`);
+}
 if (
     !signedFile ||
     normalizedInstallerName(signedFile) !== normalizedInstallerName(installerName)
@@ -103,7 +139,7 @@ const legacyManifest = {
     platforms: {
         "windows-x86_64": {
             signature: nsis.signature,
-            url: nsis.url,
+            url: legacyUrl,
         },
     },
 };

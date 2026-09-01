@@ -98,6 +98,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           $version = '${{ steps.tauri.outputs.appVersion }}'
           $manifestDir = Join-Path $env:RUNNER_TEMP 'tauri-release-manifest'
           New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
