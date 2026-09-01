@@ -1,15 +1,15 @@
+use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::env;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::Mutex;
-use dotenvy::dotenv;
-use std::env;
-use tauri::{Manager, State, Emitter};
-use discord_rich_presence::{activity, DiscordIpc, DiscordIpcClient};
+use std::sync::{Arc, Mutex};
+use tauri::{Emitter, Manager, State};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -122,6 +122,10 @@ pub struct TrackMetadata {
     pub wiki_summary: Option<String>,
     pub track_images: Vec<ArtImage>,
     pub album_images: Vec<ArtImage>,
+    #[serde(default)]
+    pub track_number: Option<u32>,
+    #[serde(default)]
+    pub track_total: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -138,30 +142,38 @@ pub struct TrackHistory {
 pub struct AppState {
     pub settings: Mutex<AppSettings>,
     pub discord_rpc: Mutex<Option<DiscordIpcClient>>,
+    pub cache_download_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 use std::sync::OnceLock;
 static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
+static YOUTUBE_QUERY_CACHE: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 
 // ---------- Helpers ----------
 
 fn get_bundled_bin_dir() -> Option<PathBuf> {
     let handle = APP_HANDLE.get()?;
-    
+
     // Candidate 1: Standard flattened resource path
-    if let Ok(p) = handle.path().resolve("bin", tauri::path::BaseDirectory::Resource) {
+    if let Ok(p) = handle
+        .path()
+        .resolve("bin", tauri::path::BaseDirectory::Resource)
+    {
         if p.is_dir() {
             return Some(p);
         }
     }
-    
+
     // Candidate 2: _up_/bin/ mapped resource path
-    if let Ok(p) = handle.path().resolve("_up_/bin", tauri::path::BaseDirectory::Resource) {
+    if let Ok(p) = handle
+        .path()
+        .resolve("_up_/bin", tauri::path::BaseDirectory::Resource)
+    {
         if p.is_dir() {
             return Some(p);
         }
     }
-    
+
     // Candidate 3: In development
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let p = PathBuf::from(manifest).join("../bin");
@@ -180,21 +192,27 @@ fn get_bundled_bin_path(name: &str) -> Option<PathBuf> {
     } else {
         name.to_string()
     };
-    
+
     // Candidate 1: Standard flattened resource path
-    if let Ok(p) = handle.path().resolve(format!("bin/{}", filename), tauri::path::BaseDirectory::Resource) {
+    if let Ok(p) = handle.path().resolve(
+        format!("bin/{}", filename),
+        tauri::path::BaseDirectory::Resource,
+    ) {
         if p.is_file() {
             return Some(p);
         }
     }
-    
+
     // Candidate 2: _up_/bin/ mapped resource path
-    if let Ok(p) = handle.path().resolve(format!("_up_/bin/{}", filename), tauri::path::BaseDirectory::Resource) {
+    if let Ok(p) = handle.path().resolve(
+        format!("_up_/bin/{}", filename),
+        tauri::path::BaseDirectory::Resource,
+    ) {
         if p.is_file() {
             return Some(p);
         }
     }
-    
+
     // Candidate 3: In development
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
         let p = PathBuf::from(manifest).join("../bin").join(&filename);
@@ -267,7 +285,8 @@ fn load_history() -> std::collections::HashMap<String, TrackHistory> {
 
 fn save_history(history: &std::collections::HashMap<String, TrackHistory>) -> Result<(), String> {
     let path = history_file();
-    let data = serde_json::to_string_pretty(history).map_err(|e| format!("Failed to serialize history: {}", e))?;
+    let data = serde_json::to_string_pretty(history)
+        .map_err(|e| format!("Failed to serialize history: {}", e))?;
     std::fs::write(&path, data).map_err(|e| format!("Failed to write history: {}", e))?;
     Ok(())
 }
@@ -287,7 +306,7 @@ fn default_download_dir() -> PathBuf {
         .or_else(dirs::download_dir)
         .or_else(dirs::home_dir)
         .unwrap_or_else(|| PathBuf::from("."));
-    
+
     // If it's home_dir, or relative, let's push "Music" to keep it clean.
     if path == PathBuf::from(".") || dirs::home_dir().map(|h| h == path).unwrap_or(false) {
         path.push("Music");
@@ -308,11 +327,23 @@ fn load_settings_from_disk() -> AppSettings {
     };
 
     let mut modified = false;
-    if settings.cache_dir.is_none() || settings.cache_dir.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false) {
+    if settings.cache_dir.is_none()
+        || settings
+            .cache_dir
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(false)
+    {
         settings.cache_dir = Some(default_cache_dir().to_string_lossy().to_string());
         modified = true;
     }
-    if settings.download_dir.is_none() || settings.download_dir.as_ref().map(|s| s.trim().is_empty()).unwrap_or(false) {
+    if settings.download_dir.is_none()
+        || settings
+            .download_dir
+            .as_ref()
+            .map(|s| s.trim().is_empty())
+            .unwrap_or(false)
+    {
         settings.download_dir = Some(default_download_dir().to_string_lossy().to_string());
         modified = true;
     }
@@ -361,7 +392,7 @@ fn resolve_cache_dir(settings: &AppSettings) -> PathBuf {
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(default_cache_dir);
-    
+
     if std::fs::create_dir_all(&cache).is_err() {
         let fallback = default_cache_dir();
         let _ = std::fs::create_dir_all(&fallback);
@@ -390,10 +421,7 @@ fn resolve_download_dir(settings: &AppSettings) -> PathBuf {
 
 fn check_dir_writable(path: &std::path::Path) -> Result<(), String> {
     if path.exists() && !path.is_dir() {
-        return Err(format!(
-            "Path is not a folder: {}",
-            path.to_string_lossy()
-        ));
+        return Err(format!("Path is not a folder: {}", path.to_string_lossy()));
     }
     std::fs::create_dir_all(path)
         .map_err(|e| format!("Cannot create folder ({}): {}", path.display(), e))?;
@@ -446,10 +474,7 @@ fn rebuild_download_index_from_disk(settings: &AppSettings) -> Result<usize, Str
         if index.values().any(|v| v == &filename) {
             continue;
         }
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let Some((artist, title)) = parse_download_stem(stem) else {
             continue;
         };
@@ -470,7 +495,12 @@ fn rebuild_download_index_from_disk(settings: &AppSettings) -> Result<usize, Str
 fn is_audio_file(path: &std::path::Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|ext| matches!(ext, "mp3" | "m4a" | "ogg" | "opus" | "flac" | "wav" | "webm"))
+        .map(|ext| {
+            matches!(
+                ext,
+                "mp3" | "m4a" | "ogg" | "opus" | "flac" | "wav" | "webm"
+            )
+        })
         .unwrap_or(false)
 }
 
@@ -572,8 +602,7 @@ fn resolve_existing_playback_file(
     if let Ok(entries) = std::fs::read_dir(&cache_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if is_audio_file(&path)
-                && path.file_stem().and_then(|s| s.to_str()) == Some(&hash_str)
+            if is_audio_file(&path) && path.file_stem().and_then(|s| s.to_str()) == Some(&hash_str)
             {
                 return Some(path);
             }
@@ -615,11 +644,13 @@ fn load_download_index(settings: &AppSettings) -> HashMap<String, String> {
     cleaned_index
 }
 
-fn save_download_index(settings: &AppSettings, index: &HashMap<String, String>) -> Result<(), String> {
+fn save_download_index(
+    settings: &AppSettings,
+    index: &HashMap<String, String>,
+) -> Result<(), String> {
     let json =
         serde_json::to_string_pretty(index).map_err(|e| format!("Serialize index: {}", e))?;
-    std::fs::write(download_index_path(settings), json)
-        .map_err(|e| format!("Write index: {}", e))
+    std::fs::write(download_index_path(settings), json).map_err(|e| format!("Write index: {}", e))
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -644,31 +675,8 @@ fn resolve_spotify_script() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-fn spotify_env_from_settings(settings: &AppSettings) -> HashMap<String, String> {
-    load_env();
+fn spotify_env_from_settings(_settings: &AppSettings) -> HashMap<String, String> {
     let mut map = HashMap::new();
-    let id = settings
-        .spotify_client_id
-        .clone()
-        .filter(|s| !s.is_empty())
-        .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
-        .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
-        .or_else(|| Some("83050cebbb5c42c7afbf488c7e3b777b".to_string()))
-        .filter(|s| !s.is_empty());
-    let secret = settings
-        .spotify_client_secret
-        .clone()
-        .filter(|s| !s.is_empty())
-        .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
-        .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
-        .or_else(|| Some("998a328838b84e85b66e95143ed9a974".to_string()))
-        .filter(|s| !s.is_empty());
-    if let Some(v) = id {
-        map.insert("SPOTIFY_CLIENT_ID".to_string(), v);
-    }
-    if let Some(v) = secret {
-        map.insert("SPOTIFY_CLIENT_SECRET".to_string(), v);
-    }
     if let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") {
         let repo_root = PathBuf::from(manifest).join("..").join("..").join("..");
         if repo_root.exists() {
@@ -713,8 +721,8 @@ fn resolve_embed_script() -> Option<PathBuf> {
 }
 
 fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(), String> {
-    let cover_url = best_image_url(&meta.album_images)
-        .or_else(|| best_image_url(&meta.track_images));
+    let cover_url =
+        best_image_url(&meta.album_images).or_else(|| best_image_url(&meta.track_images));
 
     let payload = serde_json::json!({
         "title": meta.title,
@@ -731,7 +739,10 @@ fn embed_metadata_file(audio_path: &PathBuf, meta: &TrackMetadata) -> Result<(),
 
     let json_str = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
 
-    let mut cmd = if std::env::var("CARGO_MANIFEST_DIR").is_err() && get_bundled_bin_path("embed_metadata").is_some() {
+    let mut cmd = if !cfg!(debug_assertions)
+        && std::env::var("CARGO_MANIFEST_DIR").is_err()
+        && get_bundled_bin_path("embed_metadata").is_some()
+    {
         let bin_path = get_bundled_bin_path("embed_metadata").unwrap();
         let mut c = Command::new(bin_path);
         c.arg(audio_path).arg(&json_str);
@@ -784,27 +795,8 @@ fn resolve_lastfm_api_key(settings: &AppSettings) -> Result<String, String> {
         })
 }
 
-fn spotify_is_configured(settings: &AppSettings) -> bool {
-    load_env();
-    let id = settings
-        .spotify_client_id
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .or_else(|| env::var("SPOTIFY_CLIENT_ID").ok())
-        .or_else(|| option_env!("SPOTIFY_CLIENT_ID").map(|s| s.to_string()))
-        .or_else(|| Some("83050cebbb5c42c7afbf488c7e3b777b".to_string()))
-        .filter(|s| !s.is_empty());
-    let secret = settings
-        .spotify_client_secret
-        .as_ref()
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .or_else(|| env::var("SPOTIFY_CLIENT_SECRET").ok())
-        .or_else(|| option_env!("SPOTIFY_CLIENT_SECRET").map(|s| s.to_string()))
-        .or_else(|| Some("998a328838b84e85b66e95143ed9a974".to_string()))
-        .filter(|s| !s.is_empty());
-    id.is_some() && secret.is_some()
+fn spotify_is_configured(_settings: &AppSettings) -> bool {
+    true
 }
 
 async fn lastfm_get(api_key: &str, method: &str, extra_params: &str) -> Result<Value, String> {
@@ -866,7 +858,11 @@ fn parse_synced_lyrics(raw: &str) -> Vec<LyricLine> {
         }
     }
 
-    lines.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    lines.sort_by(|a, b| {
+        a.time
+            .partial_cmp(&b.time)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     lines
 }
 
@@ -928,11 +924,9 @@ async fn try_lrclib_lyrics(client: &reqwest::Client, artist: &str, title: &str) 
 fn is_vietnamese_lyrics(text: &str) -> bool {
     let vn_chars = [
         'đ', 'Đ', 'ư', 'Ư', 'ơ', 'Ơ', 'ả', 'Ả', 'ẻ', 'Ẻ', 'ỉ', 'Ỉ', 'ỏ', 'Ỏ', 'ủ', 'Ủ', 'ỷ', 'Ỷ',
-        'ã', 'Ã', 'ẽ', 'Ẽ', 'ĩ', 'Ĩ', 'õ', 'Õ', 'ũ', 'Ũ', 'ỹ', 'Ỹ',
-        'ạ', 'Ạ', 'ẹ', 'Ẹ', 'ị', 'Ị', 'ọ', 'Ọ', 'ụ', 'Ụ', 'ỵ', 'Ỵ',
-        'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ',
-        'ế', 'ề', 'ể', 'ễ', 'ệ', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ',
-        'ớ', 'ờ', 'ở', 'ỡ', 'ợ', 'ứ', 'ừ', 'ử', 'ữ', 'ự'
+        'ã', 'Ã', 'ẽ', 'Ẽ', 'ĩ', 'Ĩ', 'õ', 'Õ', 'ũ', 'Ũ', 'ỹ', 'Ỹ', 'ạ', 'Ạ', 'ẹ', 'Ẹ', 'ị', 'Ị',
+        'ọ', 'Ọ', 'ụ', 'Ụ', 'ỵ', 'Ỵ', 'ắ', 'ằ', 'ẳ', 'ẵ', 'ặ', 'ấ', 'ầ', 'ẩ', 'ẫ', 'ậ', 'ế', 'ề',
+        'ể', 'ễ', 'ệ', 'ố', 'ồ', 'ổ', 'ỗ', 'ộ', 'ớ', 'ờ', 'ở', 'ỡ', 'ợ', 'ứ', 'ừ', 'ử', 'ữ', 'ự',
     ];
     let mut count = 0;
     for c in text.chars() {
@@ -977,7 +971,9 @@ async fn try_lrclib_lyrics_payload(
                     .unwrap_or_default();
 
                 // Skip if this is a Vietnamese translation but the target is not Vietnamese
-                if is_target_vietnamese || (!is_vietnamese_lyrics(synced_raw) && !is_vietnamese_lyrics(&plain)) {
+                if is_target_vietnamese
+                    || (!is_vietnamese_lyrics(synced_raw) && !is_vietnamese_lyrics(&plain))
+                {
                     let synced = parse_synced_lyrics(synced_raw);
                     if !synced.is_empty() {
                         return Some(LyricsPayload {
@@ -1034,7 +1030,9 @@ async fn try_lrclib_lyrics_payload(
             .unwrap_or_default();
 
         // Skip Vietnamese translations for non-Vietnamese tracks
-        if !is_target_vietnamese && (is_vietnamese_lyrics(synced_raw) || is_vietnamese_lyrics(&plain)) {
+        if !is_target_vietnamese
+            && (is_vietnamese_lyrics(synced_raw) || is_vietnamese_lyrics(&plain))
+        {
             continue;
         }
 
@@ -1245,7 +1243,6 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-
 #[tauri::command]
 fn window_hide(app: tauri::AppHandle) -> Result<(), String> {
     app.get_webview_window("main")
@@ -1287,15 +1284,17 @@ fn add_to_history(track: PlaylistTrack) -> Result<(), String> {
         .unwrap()
         .as_secs();
 
-    let entry = history.entry(track.id.clone()).or_insert_with(|| TrackHistory {
-        id: track.id,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        image: track.image,
-        duration_secs: track.duration_secs,
-        play_timestamps: Vec::new(),
-    });
+    let entry = history
+        .entry(track.id.clone())
+        .or_insert_with(|| TrackHistory {
+            id: track.id,
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            image: track.image,
+            duration_secs: track.duration_secs,
+            play_timestamps: Vec::new(),
+        });
 
     entry.play_timestamps.push(now);
     save_history(&history)
@@ -1352,9 +1351,7 @@ fn set_settings(input: SetSettingsPayload, state: State<AppState>) -> Result<App
 
 #[tauri::command]
 fn pick_folder(title: String) -> Result<Option<String>, String> {
-    let folder = rfd::FileDialog::new()
-        .set_title(&title)
-        .pick_folder();
+    let folder = rfd::FileDialog::new().set_title(&title).pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
 }
 
@@ -1394,6 +1391,119 @@ fn pick_json_file() -> Result<Option<String>, String> {
     Ok(None)
 }
 
+fn clean_rust_album_name(album: &str, artist: &str, title: &str) -> String {
+    let norm_artist = artist.to_lowercase();
+    let norm_title = title.to_lowercase();
+
+    // 1. Manual Overrides
+    if norm_artist.contains("tyler")
+        && norm_artist.contains("creator")
+        && norm_title.contains("see you again")
+    {
+        return "Flower Boy".to_string();
+    }
+    if norm_artist.contains("porter")
+        && norm_artist.contains("robinson")
+        && norm_title.contains("knock yourself out")
+    {
+        return "SMILE! :D".to_string();
+    }
+
+    let mut album_cleaned = album.to_string();
+
+    let keywords = [
+        "explicit",
+        "clean",
+        "spotify",
+        "deluxe",
+        "collectors",
+        "collector's",
+        "single",
+        "bonus",
+        "remaster",
+        "expanded",
+        "special",
+        "anniversary",
+    ];
+
+    // Scan character vector to strip any matching parentheses/brackets/braces containing keywords
+    let mut chars = album_cleaned.chars().collect::<Vec<_>>();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '(' || chars[i] == '[' || chars[i] == '{' {
+            let open_char = chars[i];
+            let close_char = if open_char == '(' {
+                ')'
+            } else if open_char == '[' {
+                ']'
+            } else {
+                '}'
+            };
+            let mut j = i + 1;
+            let mut found_close = false;
+            while j < chars.len() {
+                if chars[j] == close_char {
+                    found_close = true;
+                    break;
+                }
+                j += 1;
+            }
+            if found_close {
+                let content: String = chars[i + 1..j].iter().collect();
+                let lower_content = content.to_lowercase();
+                if keywords.iter().any(|&kw| lower_content.contains(kw)) {
+                    chars.drain(i..=j);
+                    continue; // Skip incrementing i since elements were removed
+                }
+            }
+        }
+        i += 1;
+    }
+    album_cleaned = chars.into_iter().collect();
+
+    let mut lower = album_cleaned.to_lowercase();
+
+    // Strip keywords attached via hyphens or commas
+    for kw in &keywords {
+        let hyphen_pattern = format!(" - {}", kw);
+        if let Some(idx) = lower.find(&hyphen_pattern) {
+            album_cleaned.truncate(idx);
+            lower = album_cleaned.to_lowercase();
+        }
+        let comma_pattern = format!(", {}", kw);
+        if let Some(idx) = lower.find(&comma_pattern) {
+            album_cleaned.truncate(idx);
+            lower = album_cleaned.to_lowercase();
+        }
+    }
+
+    // Strip Collectors Edition variations outside brackets
+    if lower.ends_with(" collectors edition") {
+        album_cleaned.truncate(album_cleaned.len() - 19);
+        lower = album_cleaned.to_lowercase();
+    } else if lower.ends_with(" collectors edition.") {
+        album_cleaned.truncate(album_cleaned.len() - 20);
+        lower = album_cleaned.to_lowercase();
+    } else if lower.ends_with(" collector's edition") {
+        album_cleaned.truncate(album_cleaned.len() - 20);
+        lower = album_cleaned.to_lowercase();
+    } else if lower.ends_with(" collector's edition.") {
+        album_cleaned.truncate(album_cleaned.len() - 21);
+        lower = album_cleaned.to_lowercase();
+    }
+
+    let mut result = album_cleaned.trim().to_string();
+    while result.ends_with('.') || result.ends_with('-') || result.ends_with(' ') {
+        result.pop();
+        result = result.trim().to_string();
+    }
+
+    if result.is_empty() {
+        return album.to_string();
+    }
+    result
+}
+
 #[tauri::command]
 async fn fetch_track_metadata(
     artist: String,
@@ -1431,14 +1541,18 @@ async fn fetch_track_metadata(
         .to_string();
     let artist_name = track_obj
         .get("artist")
-        .and_then(|a| a.get("name").and_then(|n| n.as_str()).or_else(|| a.as_str()))
+        .and_then(|a| {
+            a.get("name")
+                .and_then(|n| n.as_str())
+                .or_else(|| a.as_str())
+        })
         .unwrap_or(&artist)
         .to_string();
 
     let album_name = track_obj
         .get("album")
         .and_then(|a| a.get("title").and_then(|t| t.as_str()))
-        .map(|s| s.to_string());
+        .map(|s| clean_rust_album_name(s, &artist_name, &title));
 
     let duration_secs = track_obj
         .get("duration")
@@ -1447,12 +1561,16 @@ async fn fetch_track_metadata(
         .or_else(|| track_obj.get("duration").and_then(|d| d.as_u64()))
         .map(normalize_duration_secs);
 
-    let listeners = track_obj
-        .get("listeners")
-        .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())));
-    let playcount = track_obj
-        .get("playcount")
-        .and_then(|v| v.as_str().map(String::from).or_else(|| v.as_u64().map(|n| n.to_string())));
+    let listeners = track_obj.get("listeners").and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    });
+    let playcount = track_obj.get("playcount").and_then(|v| {
+        v.as_str()
+            .map(String::from)
+            .or_else(|| v.as_u64().map(|n| n.to_string()))
+    });
 
     let url = track_obj
         .get("url")
@@ -1492,10 +1610,7 @@ async fn fetch_track_metadata(
         if let Ok(album_data) = lastfm_get(
             &api_key,
             "album.getInfo",
-            &format!(
-                "&artist={}&album={}",
-                encoded_artist, encoded_album
-            ),
+            &format!("&artist={}&album={}", encoded_artist, encoded_album),
         )
         .await
         {
@@ -1507,6 +1622,17 @@ async fn fetch_track_metadata(
             }
         }
     }
+
+    let track_number = track_obj
+        .get("album")
+        .and_then(|a| a.get("@attr"))
+        .and_then(|attr| attr.get("position"))
+        .and_then(|p| {
+            p.as_str()
+                .map(|s| s.parse::<u32>().ok())
+                .flatten()
+                .or_else(|| p.as_u64().map(|n| n as u32))
+        });
 
     Ok(TrackMetadata {
         title,
@@ -1521,6 +1647,8 @@ async fn fetch_track_metadata(
         wiki_summary,
         track_images,
         album_images,
+        track_number,
+        track_total: None,
     })
 }
 
@@ -1554,41 +1682,49 @@ async fn fetch_lastfm(
 fn clean_title(title: &str) -> String {
     let mut cleaned = title.to_string();
     let markers = [
-        " (feat.", " [feat.", " (feat ", " [feat ",
-        " (featuring", " [featuring",
-        " (with ", " [with ",
-        " (prod.", " [prod."
+        " (feat.",
+        " [feat.",
+        " (feat ",
+        " [feat ",
+        " (featuring",
+        " [featuring",
+        " (with ",
+        " [with ",
+        " (prod.",
+        " [prod.",
     ];
-    
+
     for marker in &markers {
         if let Some(idx) = cleaned.to_lowercase().find(marker) {
             cleaned.truncate(idx);
         }
     }
-    
+
     cleaned.trim().to_string()
 }
 
 fn is_artist_match(query_artist: &str, result_artist: &str) -> bool {
     let q = query_artist.to_lowercase();
     let r = result_artist.to_lowercase();
-    
+
     if q.contains(&r) || r.contains(&q) {
         return true;
     }
-    
-    let q_words: Vec<&str> = q.split(|c: char| !c.is_alphanumeric())
+
+    let q_words: Vec<&str> = q
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
         .collect();
-        
-    let r_words: Vec<&str> = r.split(|c: char| !c.is_alphanumeric())
+
+    let r_words: Vec<&str> = r
+        .split(|c: char| !c.is_alphanumeric())
         .filter(|w| w.len() > 2)
         .collect();
-        
+
     if q_words.is_empty() || r_words.is_empty() {
         return q == r || q.contains(&r) || r.contains(&q);
     }
-        
+
     for qw in &q_words {
         for rw in &r_words {
             if qw == rw {
@@ -1596,17 +1732,23 @@ fn is_artist_match(query_artist: &str, result_artist: &str) -> bool {
             }
         }
     }
-    
+
     false
 }
 
 fn is_title_match(query_title: &str, result_title: &str) -> bool {
     let q_clean = clean_title(query_title).to_lowercase();
     let r_clean = clean_title(result_title).to_lowercase();
-    
-    let q = q_clean.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
-    let r = r_clean.chars().filter(|c| c.is_alphanumeric()).collect::<String>();
-    
+
+    let q = q_clean
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>();
+    let r = r_clean
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .collect::<String>();
+
     q == r || q.contains(&r) || r.contains(&q)
 }
 
@@ -1615,7 +1757,7 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
-    
+
     let cleaned_title = clean_title(&title);
     let query = format!("{} {}", artist, cleaned_title);
     let url = format!(
@@ -1636,14 +1778,19 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let results = data.get("results")
-        .and_then(|r| r.as_array());
+    let results = data.get("results").and_then(|r| r.as_array());
 
     if let Some(tracks) = results {
         // Priority 1: Match both artist and title
         for track in tracks {
-            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
-            let res_title = track.get("trackName").and_then(|t| t.as_str()).unwrap_or("");
+            let res_artist = track
+                .get("artistName")
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
+            let res_title = track
+                .get("trackName")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
             if is_artist_match(&artist, res_artist) && is_title_match(&title, res_title) {
                 if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
                     return Ok(Some(art_url.to_string()));
@@ -1652,7 +1799,10 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         }
         // Priority 2: Match title only
         for track in tracks {
-            let res_title = track.get("trackName").and_then(|t| t.as_str()).unwrap_or("");
+            let res_title = track
+                .get("trackName")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
             if is_title_match(&title, res_title) {
                 if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
                     return Ok(Some(art_url.to_string()));
@@ -1661,7 +1811,10 @@ async fn fetch_itunes_cover_art(artist: String, title: String) -> Result<Option<
         }
         // Priority 3: Fallback to matching artist only
         for track in tracks {
-            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
+            let res_artist = track
+                .get("artistName")
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
             if is_artist_match(&artist, res_artist) {
                 if let Some(art_url) = track.get("artworkUrl100").and_then(|u| u.as_str()) {
                     return Ok(Some(art_url.to_string()));
@@ -1687,7 +1840,7 @@ async fn fetch_deezer_cover_art(artist: String, title: String) -> Result<Option<
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
-    
+
     let query = format!("artist:\"{}\" track:\"{}\"", artist, title);
     let url = format!(
         "https://api.deezer.com/search?q={}&limit=5",
@@ -1707,16 +1860,18 @@ async fn fetch_deezer_cover_art(artist: String, title: String) -> Result<Option<
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let results = data.get("data")
-        .and_then(|r| r.as_array());
+    let results = data.get("data").and_then(|r| r.as_array());
 
     if let Some(tracks) = results {
         // Priority 1: Match both artist and title
         for track in tracks {
             let artist_obj = track.get("artist");
-            let res_artist = artist_obj.and_then(|a| a.get("name")).and_then(|n| n.as_str()).unwrap_or("");
+            let res_artist = artist_obj
+                .and_then(|a| a.get("name"))
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
             let res_title = track.get("title").and_then(|t| t.as_str()).unwrap_or("");
-            
+
             if is_artist_match(&artist, res_artist) && is_title_match(&title, res_title) {
                 if let Some(album) = track.get("album") {
                     if let Some(art_url) = album.get("cover_xl").and_then(|u| u.as_str()) {
@@ -1752,7 +1907,7 @@ async fn fetch_itunes_preview(artist: String, title: String) -> Result<Option<St
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
     }
-    
+
     let cleaned_title = clean_title(&title);
     let query = format!("{} {}", artist, cleaned_title);
     let url = format!(
@@ -1773,13 +1928,15 @@ async fn fetch_itunes_preview(artist: String, title: String) -> Result<Option<St
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
-    let results = data.get("results")
-        .and_then(|r| r.as_array());
+    let results = data.get("results").and_then(|r| r.as_array());
 
     if let Some(tracks) = results {
         for track in tracks {
-            let res_artist = track.get("artistName").and_then(|a| a.as_str()).unwrap_or("");
-            
+            let res_artist = track
+                .get("artistName")
+                .and_then(|a| a.as_str())
+                .unwrap_or("");
+
             if is_artist_match(&artist, res_artist) {
                 if let Some(preview_url) = track.get("previewUrl").and_then(|u| u.as_str()) {
                     return Ok(Some(preview_url.to_string()));
@@ -1804,7 +1961,9 @@ const YTDLP_AUDIO_FORMAT: &str = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaud
 
 fn ytmusic_script_path() -> PathBuf {
     if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-        let p = PathBuf::from(manifest).join("src").join("ytmusic_search.py");
+        let p = PathBuf::from(manifest)
+            .join("src")
+            .join("ytmusic_search.py");
         if p.is_file() {
             return p;
         }
@@ -1834,9 +1993,23 @@ fn resolve_youtube_query(
         return q.replace("music.youtube.com", "www.youtube.com");
     }
 
+    let cache_key = format!(
+        "{}|{}|{}|{}",
+        q.to_lowercase(),
+        title.unwrap_or("").trim().to_lowercase(),
+        artist.unwrap_or("").trim().to_lowercase(),
+        duration_secs.unwrap_or_default()
+    );
+    let query_cache = YOUTUBE_QUERY_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = query_cache.lock().unwrap().get(&cache_key).cloned() {
+        return cached;
+    }
+
     let mut resolved = format!("ytsearch1:{} audio", q);
     let script_path = ytmusic_script_path();
     if !script_path.is_file() {
+        let mut cache = query_cache.lock().unwrap();
+        cache.insert(cache_key, resolved.clone());
         return resolved;
     }
 
@@ -1863,6 +2036,12 @@ fn resolve_youtube_query(
             }
         }
     }
+
+    let mut cache = query_cache.lock().unwrap();
+    if cache.len() >= 512 {
+        cache.clear();
+    }
+    cache.insert(cache_key, resolved.clone());
     resolved
 }
 
@@ -1901,7 +2080,6 @@ fn run_ytdlp_cache_download(yt_query: &str, out_template: &str) -> Result<(), St
         .arg("--no-warnings")
         .arg("--fixup")
         .arg("never")
-        .arg("--no-part")
         .arg("--output")
         .arg(out_template)
         .output()
@@ -1945,7 +2123,6 @@ fn run_ytdlp_cache_download(yt_query: &str, out_template: &str) -> Result<(), St
         .arg("--no-warnings")
         .arg("--fixup")
         .arg("never")
-        .arg("--no-part")
         .arg("--output")
         .arg(out_template)
         .output()
@@ -1971,20 +2148,17 @@ async fn stream_song(
     state: State<'_, AppState>,
 ) -> Result<StreamResult, String> {
     ensure_stream_server_started();
-    
-    use std::hash::{Hash, Hasher};
+
     use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
 
     let settings = state.settings.lock().unwrap().clone();
     let cache_dir = resolve_cache_dir(&settings);
     check_dir_writable(&cache_dir).map_err(|e| format!("Cache storage error: {}", e))?;
 
-    if let Some(path) = resolve_existing_playback_file(
-        &settings,
-        &query,
-        artist.as_deref(),
-        title.as_deref(),
-    ) {
+    if let Some(path) =
+        resolve_existing_playback_file(&settings, &query, artist.as_deref(), title.as_deref())
+    {
         return Ok(stream_result_from_path(&path));
     }
 
@@ -1996,20 +2170,51 @@ async fn stream_song(
     query.hash(&mut hasher);
     let hash_str = format!("{:x}", hasher.finish());
 
-    let yt_query = resolve_youtube_query(
-        &query,
-        title.as_deref(),
-        artist.as_deref(),
-        duration_secs,
-    );
+    let download_lock = {
+        let mut locks = state.cache_download_locks.lock().unwrap();
+        if locks.len() >= 512 {
+            locks.retain(|_, lock| Arc::strong_count(lock) > 1);
+        }
+        locks
+            .entry(hash_str.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    };
+    let _download_guard = download_lock.lock().await;
+
+    // Another caller may have completed this track while we waited for its lock.
+    if let Some(path) =
+        resolve_existing_playback_file(&settings, &query, artist.as_deref(), title.as_deref())
+    {
+        return Ok(stream_result_from_path(&path));
+    }
+
+    let resolve_query = query.clone();
+    let resolve_title = title.clone();
+    let resolve_artist = artist.clone();
+    let yt_query = tokio::task::spawn_blocking(move || {
+        resolve_youtube_query(
+            &resolve_query,
+            resolve_title.as_deref(),
+            resolve_artist.as_deref(),
+            duration_secs,
+        )
+    })
+    .await
+    .map_err(|e| format!("YouTube lookup task failed: {}", e))?;
 
     let out_template = format!("{}/{}.%(ext)s", cache_dir.to_str().unwrap(), hash_str);
-    run_ytdlp_cache_download(&yt_query, &out_template)?;
+    tokio::task::spawn_blocking(move || run_ytdlp_cache_download(&yt_query, &out_template))
+        .await
+        .map_err(|e| format!("Audio cache task failed: {}", e))??;
 
     let files: Vec<_> = std::fs::read_dir(&cache_dir)
         .map_err(|e| format!("Cannot read cache dir: {}", e))?
         .filter_map(|e| e.ok())
-        .filter(|e| is_audio_file(&e.path()) && e.path().file_stem().and_then(|s| s.to_str()) == Some(&hash_str))
+        .filter(|e| {
+            is_audio_file(&e.path())
+                && e.path().file_stem().and_then(|s| s.to_str()) == Some(&hash_str)
+        })
         .collect();
 
     let file_path = files
@@ -2058,10 +2263,7 @@ async fn save_song_internal(
 
     let dl_dir = resolve_download_dir(&settings);
     check_dir_writable(&dl_dir).map_err(|e| format!("Download storage error: {}", e))?;
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("mp3");
+    let ext = src.extension().and_then(|e| e.to_str()).unwrap_or("mp3");
 
     let filename = if let Some(ref meta) = metadata {
         let name = format!(
@@ -2083,7 +2285,11 @@ async fn save_song_internal(
 
     if let Some(meta) = metadata {
         if let Err(e) = embed_metadata_file(&dest, &meta) {
-            eprintln!("Warning: Failed to embed metadata to {}: {}", dest.display(), e);
+            eprintln!(
+                "Warning: Failed to embed metadata to {}: {}",
+                dest.display(),
+                e
+            );
         }
         let key = track_key(&meta.artist, &meta.title);
         let mut index = load_download_index(&settings);
@@ -2205,7 +2411,6 @@ fn wipe_all_data(delete_downloads: bool, state: State<'_, AppState>) -> Result<(
     Ok(())
 }
 
-
 #[derive(Serialize)]
 struct DownloadItemInfo {
     key: String,
@@ -2225,10 +2430,10 @@ fn get_downloads_info(state: State<'_, AppState>) -> Result<DownloadsInfo, Strin
     let _ = rebuild_download_index_from_disk(&settings);
     let index = load_download_index(&settings);
     let download_dir = resolve_download_dir(&settings);
-    
+
     let mut items = Vec::new();
     let mut total_size_bytes = 0;
-    
+
     for (key, filename) in index {
         let path = download_dir.join(&filename);
         let size_bytes = if path.is_file() {
@@ -2243,7 +2448,7 @@ fn get_downloads_info(state: State<'_, AppState>) -> Result<DownloadsInfo, Strin
             size_bytes,
         });
     }
-    
+
     Ok(DownloadsInfo {
         total_size_bytes,
         items,
@@ -2254,7 +2459,7 @@ fn get_downloads_info(state: State<'_, AppState>) -> Result<DownloadsInfo, Strin
 fn open_downloads_directory(state: State<'_, AppState>) -> Result<(), String> {
     let settings = state.settings.lock().unwrap().clone();
     let download_dir = resolve_download_dir(&settings);
-    
+
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
@@ -2262,7 +2467,7 @@ fn open_downloads_directory(state: State<'_, AppState>) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    
+
     #[cfg(target_os = "macos")]
     {
         std::process::Command::new("open")
@@ -2270,7 +2475,7 @@ fn open_downloads_directory(state: State<'_, AppState>) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    
+
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
         std::process::Command::new("xdg-open")
@@ -2278,7 +2483,7 @@ fn open_downloads_directory(state: State<'_, AppState>) -> Result<(), String> {
             .spawn()
             .map_err(|e| e.to_string())?;
     }
-    
+
     Ok(())
 }
 
@@ -2420,7 +2625,8 @@ fn check_system_dependencies() -> DependencyStatus {
 
     // 4. Check spotdl module if not bundled
     if !status.spotdl {
-        let local_spotdl = std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
+        let local_spotdl =
+            std::path::Path::new("../spotdl").is_dir() || std::path::Path::new("spotdl").is_dir();
         if local_spotdl {
             status.spotdl = true;
         } else {
@@ -2479,7 +2685,9 @@ fn get_cache_path(state: State<AppState>) -> String {
 #[tauri::command]
 fn get_download_path(state: State<AppState>) -> String {
     let settings = state.settings.lock().unwrap().clone();
-    resolve_download_dir(&settings).to_string_lossy().to_string()
+    resolve_download_dir(&settings)
+        .to_string_lossy()
+        .to_string()
 }
 
 /// Legacy download command (kept for compatibility).
@@ -2540,7 +2748,10 @@ async fn download_song(query: String, state: State<'_, AppState>) -> Result<Song
 
             if !fallback_output.status.success() {
                 let fallback_err = String::from_utf8_lossy(&fallback_output.stderr);
-                return Err(format!("Download failed even with fallback:\n{}", fallback_err));
+                return Err(format!(
+                    "Download failed even with fallback:\n{}",
+                    fallback_err
+                ));
             }
         } else {
             return Err(format!("Download failed: {}", err));
@@ -2591,7 +2802,10 @@ fn find_first_audio_file(root: &std::path::Path, candidates: &[&str]) -> Option<
                 continue;
             }
             if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
-                if candidates.iter().any(|candidate| name.eq_ignore_ascii_case(candidate)) {
+                if candidates
+                    .iter()
+                    .any(|candidate| name.eq_ignore_ascii_case(candidate))
+                {
                     return Some(path);
                 }
             }
@@ -2668,7 +2882,11 @@ async fn prepare_karaoke_stems(
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false);
-    let model_name = if demucs_available { "demucs" } else { "spleeter" };
+    let model_name = if demucs_available {
+        "demucs"
+    } else {
+        "spleeter"
+    };
 
     let mut cmd = std::process::Command::new("python");
     if demucs_available {
@@ -2690,17 +2908,24 @@ async fn prepare_karaoke_stems(
     }
     configure_command_env(&mut cmd);
 
-    let output = cmd.output().map_err(|e| format!("Failed to run vocal separation: {}", e))?;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run vocal separation: {}", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Vocal separation failed ({}):\n{}", model_name, stderr));
+        return Err(format!(
+            "Vocal separation failed ({}):\n{}",
+            model_name, stderr
+        ));
     }
 
     let instrumental = find_first_audio_file(
         &output_dir,
         &["no_vocals.wav", "instrumental.wav", "accompaniment.wav"],
     )
-    .ok_or_else(|| "Karaoke stems were generated, but no instrumental track was found.".to_string())?;
+    .ok_or_else(|| {
+        "Karaoke stems were generated, but no instrumental track was found.".to_string()
+    })?;
 
     Ok(KaraokeStemResult {
         source_path: source_str,
@@ -2712,30 +2937,25 @@ async fn prepare_karaoke_stems(
     })
 }
 
-/// Resolve Spotify URLs / playlist: queries via spotDL Python bridge.
-#[tauri::command]
-async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<String, String> {
-    let settings = effective_settings(&state);
-    if !spotify_is_configured(&settings) {
-        return Err(
-            "Spotify is not configured. Add Client ID and Secret in Settings.".to_string(),
-        );
-    }
-    let mut cmd = if std::env::var("CARGO_MANIFEST_DIR").is_err() && get_bundled_bin_path("spotify_query").is_some() {
+async fn run_spotify_query_internal(query: &str, settings: &AppSettings) -> Result<Value, String> {
+    let mut cmd = if !cfg!(debug_assertions)
+        && std::env::var("CARGO_MANIFEST_DIR").is_err()
+        && get_bundled_bin_path("spotify_query").is_some()
+    {
         let bin_path = get_bundled_bin_path("spotify_query").unwrap();
         let mut c = Command::new(bin_path);
-        c.arg(&query);
+        c.arg(query);
         configure_command_env(&mut c);
         c
     } else {
         let script = resolve_spotify_script()
             .ok_or_else(|| "spotify_query.py not found in scripts/".to_string())?;
         let mut c = Command::new("python");
-        c.arg(&script).arg(&query);
+        c.arg(&script).arg(query);
         configure_command_env(&mut c);
         c
     };
-    for (k, v) in spotify_env_from_settings(&settings) {
+    for (k, v) in spotify_env_from_settings(settings) {
         cmd.env(k, v);
     }
 
@@ -2744,8 +2964,11 @@ async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<Str
         .map_err(|e| format!("Failed to run spotify_query: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    println!("[VLC Sync] spotify_query stdout: {}", stdout);
+    println!("[VLC Sync] spotify_query stderr: {}", stderr);
+
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
         if let Ok(val) = serde_json::from_str::<Value>(&stdout) {
             if let Some(err) = val.get("error").and_then(|e| e.as_str()) {
                 return Err(err.to_string());
@@ -2754,7 +2977,166 @@ async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<Str
         return Err(format!("Spotify query failed: {}\n{}", stderr, stdout));
     }
 
-    Ok(stdout)
+    let parsed: Value =
+        serde_json::from_str(&stdout).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+    Ok(parsed)
+}
+
+/// Resolve Spotify URLs / playlist: queries via spotDL Python bridge.
+#[tauri::command]
+async fn spotify_search(query: String, state: State<'_, AppState>) -> Result<String, String> {
+    let settings = effective_settings(&state);
+    let res = run_spotify_query_internal(&query, &settings).await?;
+    Ok(serde_json::to_string(&res).unwrap_or_default())
+}
+
+/// Retroactively clean and unify metadata tags across already-downloaded tracks.
+#[tauri::command]
+async fn fix_downloads_metadata(
+    window: tauri::Window,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let settings = effective_settings(&state);
+    let index = load_download_index(&settings);
+    let download_dir = resolve_download_dir(&settings);
+
+    let total_count = index.len();
+    if total_count == 0 {
+        return Ok("No downloaded tracks found to fix.".to_string());
+    }
+
+    let mut updated_count = 0;
+    let mut errors = Vec::new();
+    let mut current_idx = 0;
+
+    for (key, filename) in &index {
+        current_idx += 1;
+
+        // Emit progress event to update frontend UI
+        let percent = (current_idx * 100) / total_count;
+        let _ = window.emit(
+            "fix-metadata-progress",
+            serde_json::json!({
+                "current": current_idx,
+                "total": total_count,
+                "percent": percent,
+                "filename": filename,
+            }),
+        );
+
+        let parts: Vec<&str> = key.split('|').collect();
+        if parts.len() < 2 {
+            continue;
+        }
+        let artist = parts[0];
+        let title = parts[1];
+
+        let file_path = download_dir.join(filename);
+        if !file_path.is_file() {
+            continue;
+        }
+
+        // 1. Run spotify_query resolve_clean
+        let query_term = format!("resolve_clean:{}|{}", artist, title);
+        let query_res = match run_spotify_query_internal(&query_term, &settings).await {
+            Ok(res) => res,
+            Err(e) => {
+                errors.push(format!("{}: {}", filename, e));
+                continue;
+            }
+        };
+
+        // 2. Parse clean metadata
+        let Some(t_type) = query_res.get("type").and_then(|t| t.as_str()) else {
+            errors.push(format!("{}: Invalid response format", filename));
+            continue;
+        };
+        if t_type != "track_metadata" {
+            errors.push(format!(
+                "{}: Expected track_metadata, got {}",
+                filename, t_type
+            ));
+            continue;
+        }
+
+        // Map fields to TrackMetadata
+        let meta_title = query_res
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or(title)
+            .to_string();
+        let meta_artist = query_res
+            .get("artist")
+            .and_then(|v| v.as_str())
+            .unwrap_or(artist)
+            .to_string();
+        let meta_album = query_res
+            .get("album")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let meta_cover = query_res
+            .get("cover_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let track_images = if !meta_cover.is_empty() {
+            vec![ArtImage {
+                size: "large".to_string(),
+                url: meta_cover.clone(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        let track_number = query_res
+            .get("track_number")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+        let track_total = query_res
+            .get("track_total")
+            .and_then(|v| v.as_u64())
+            .map(|n| n as u32);
+
+        let meta = TrackMetadata {
+            title: meta_title,
+            artist: meta_artist,
+            album: meta_album,
+            duration_secs: None,
+            listeners: None,
+            playcount: None,
+            url: None,
+            published: None,
+            tags: Vec::new(),
+            wiki_summary: None,
+            track_images: track_images.clone(),
+            album_images: track_images,
+            track_number,
+            track_total,
+        };
+
+        // 3. Embed metadata back into file
+        if let Err(e) = embed_metadata_file(&file_path, &meta) {
+            errors.push(format!("{}: Tagging failed: {}", filename, e));
+        } else {
+            updated_count += 1;
+        }
+    }
+
+    let msg = if errors.is_empty() {
+        format!(
+            "Successfully updated metadata for {} tracks.",
+            updated_count
+        )
+    } else {
+        format!(
+            "Updated {} tracks. Errors encountered:\n{}",
+            updated_count,
+            errors.join("\n")
+        )
+    };
+
+    Ok(msg)
 }
 
 /// Download and cache album art; returns local file path.
@@ -2797,22 +3179,94 @@ fn load_playlists() -> Result<Vec<UserPlaylist>, String> {
 
 #[tauri::command]
 fn save_playlists(playlists: Vec<UserPlaylist>) -> Result<(), String> {
-    let json =
-        serde_json::to_string_pretty(&playlists).map_err(|e| format!("Serialize: {}", e))?;
+    let json = serde_json::to_string_pretty(&playlists).map_err(|e| format!("Serialize: {}", e))?;
     std::fs::write(playlists_file(), json).map_err(|e| format!("Write playlists: {}", e))
 }
 
 // Re-export best_image for tests if needed
 #[allow(dead_code)]
 fn pick_best_from_metadata(meta: &TrackMetadata) -> Option<String> {
-    best_image_url(&meta.album_images)
-        .or_else(|| best_image_url(&meta.track_images))
+    best_image_url(&meta.album_images).or_else(|| best_image_url(&meta.track_images))
 }
 
+use axum::body::{Body, Bytes};
 use axum::{extract::Query, response::IntoResponse, routing::get, Router};
+use futures_util::stream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower_http::cors::CorsLayer;
-use tokio_util::io::ReaderStream;
-use axum::body::Body;
+
+fn live_stream_cache_prefix(query: &str) -> Option<PathBuf> {
+    let handle = APP_HANDLE.get()?;
+    let state = handle.state::<AppState>();
+    let settings = effective_settings(&state);
+    let cache_dir = resolve_cache_dir(&settings);
+    if check_dir_writable(&cache_dir).is_err() {
+        return None;
+    }
+
+    let mut hasher = DefaultHasher::new();
+    query.hash(&mut hasher);
+    Some(cache_dir.join(format!("{:x}", hasher.finish())))
+}
+
+fn streamed_audio_extension(bytes: &[u8]) -> &'static str {
+    if bytes.len() >= 4 && bytes[..4] == [0x1a, 0x45, 0xdf, 0xa3] {
+        "webm"
+    } else if bytes.len() >= 4 && &bytes[..4] == b"OggS" {
+        "ogg"
+    } else if bytes.len() >= 3 && &bytes[..3] == b"ID3" {
+        "mp3"
+    } else {
+        // YouTube's preferred audio-only response is normally M4A/fMP4.
+        "m4a"
+    }
+}
+
+struct LiveCacheStreamState {
+    child: tokio::process::Child,
+    stdout: tokio::process::ChildStdout,
+    file: Option<tokio::fs::File>,
+    temp_path: Option<PathBuf>,
+    final_path: Option<PathBuf>,
+    cache_prefix: Option<PathBuf>,
+    bytes_written: u64,
+    finished: bool,
+    completed: bool,
+}
+
+impl Drop for LiveCacheStreamState {
+    fn drop(&mut self) {
+        if !self.completed {
+            if let Some(path) = self.temp_path.as_ref() {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+}
+
+async fn finish_live_cache(state: &mut LiveCacheStreamState) {
+    let status = state.child.wait().await.ok();
+    if let Some(mut file) = state.file.take() {
+        let _ = file.flush().await;
+    }
+
+    let download_succeeded =
+        status.map(|s| s.success()).unwrap_or(false) && state.bytes_written > 16 * 1024;
+    if download_succeeded {
+        if let (Some(temp), Some(final_path)) =
+            (state.temp_path.as_ref(), state.final_path.as_ref())
+        {
+            if tokio::fs::rename(temp, final_path).await.is_err() {
+                let _ = tokio::fs::remove_file(temp).await;
+            }
+        }
+    } else if let Some(temp) = state.temp_path.as_ref() {
+        let _ = tokio::fs::remove_file(temp).await;
+    }
+
+    state.completed = true;
+    state.finished = true;
+}
 
 #[derive(serde::Deserialize)]
 struct StreamQuery {
@@ -2823,12 +3277,20 @@ struct StreamQuery {
 }
 
 async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse {
-    let yt_query = resolve_youtube_query(
-        &params.q,
-        params.title.as_deref(),
-        params.artist.as_deref(),
-        params.duration,
-    );
+    let cache_prefix = live_stream_cache_prefix(&params.q);
+    let resolve_query = params.q.clone();
+    let resolve_title = params.title.clone();
+    let resolve_artist = params.artist.clone();
+    let yt_query = tokio::task::spawn_blocking(move || {
+        resolve_youtube_query(
+            &resolve_query,
+            resolve_title.as_deref(),
+            resolve_artist.as_deref(),
+            params.duration,
+        )
+    })
+    .await
+    .unwrap_or_else(|_| format!("ytsearch1:{} audio", params.q));
 
     let mut cmd = if let Some(bin_path) = get_bundled_bin_path("yt-dlp") {
         let mut c = tokio::process::Command::new(bin_path);
@@ -2842,6 +3304,7 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
         c
     };
 
+    cmd.kill_on_drop(true);
     let mut child = cmd
         .arg("-f")
         .arg(YTDLP_AUDIO_FORMAT)
@@ -2854,8 +3317,70 @@ async fn stream_handler(Query(params): Query<StreamQuery>) -> impl IntoResponse 
         .expect("failed to spawn yt-dlp");
 
     let stdout = child.stdout.take().unwrap();
-    let stream = ReaderStream::new(stdout);
-    let body = Body::from_stream(stream);
+    let state = LiveCacheStreamState {
+        child,
+        stdout,
+        file: None,
+        temp_path: None,
+        final_path: None,
+        cache_prefix,
+        bytes_written: 0,
+        finished: false,
+        completed: false,
+    };
+    let audio_stream = stream::unfold(state, |mut state| async move {
+        if state.finished {
+            return None;
+        }
+
+        let mut buffer = vec![0_u8; 64 * 1024];
+        match state.stdout.read(&mut buffer).await {
+            Ok(0) => {
+                finish_live_cache(&mut state).await;
+                None
+            }
+            Ok(read) => {
+                buffer.truncate(read);
+                if state.file.is_none() {
+                    if let Some(prefix) = state.cache_prefix.take() {
+                        let extension = streamed_audio_extension(&buffer);
+                        let temp_path = prefix.with_extension(format!("{}.part", extension));
+                        let final_path = prefix.with_extension(extension);
+                        match tokio::fs::File::create(&temp_path).await {
+                            Ok(file) => {
+                                state.file = Some(file);
+                                state.temp_path = Some(temp_path);
+                                state.final_path = Some(final_path);
+                            }
+                            Err(err) => {
+                                eprintln!("Live stream cache could not be created: {}", err);
+                            }
+                        }
+                    }
+                }
+
+                if let Some(file) = state.file.as_mut() {
+                    if let Err(err) = file.write_all(&buffer).await {
+                        eprintln!("Live stream cache write failed: {}", err);
+                        state.file = None;
+                        if let Some(temp) = state.temp_path.take() {
+                            let _ = tokio::fs::remove_file(temp).await;
+                        }
+                        state.final_path = None;
+                    } else {
+                        state.bytes_written += read as u64;
+                    }
+                }
+
+                Some((Ok::<Bytes, std::io::Error>(Bytes::from(buffer)), state))
+            }
+            Err(err) => {
+                state.finished = true;
+                Some((Err(err), state))
+            }
+        }
+    });
+    let body = Body::from_stream(audio_stream);
 
     axum::response::Response::builder()
         .header("Content-Type", "audio/mp4")
@@ -2869,8 +3394,10 @@ fn start_stream_server() {
         let app = Router::new()
             .route("/stream", get(stream_handler))
             .layer(CorsLayer::permissive());
-        
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:8000").await.unwrap();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:8000")
+            .await
+            .unwrap();
         axum::serve(listener, app).await.unwrap();
     });
 }
@@ -2882,7 +3409,6 @@ fn ensure_stream_server_started() {
         start_stream_server();
     });
 }
-
 
 // ---------- Discord Rich Presence ----------
 
@@ -2923,7 +3449,10 @@ struct DiscordPresencePayload {
 }
 
 #[tauri::command]
-fn discord_update_presence(payload: DiscordPresencePayload, state: State<AppState>) -> Result<(), String> {
+fn discord_update_presence(
+    payload: DiscordPresencePayload,
+    state: State<AppState>,
+) -> Result<(), String> {
     let mut guard = state.discord_rpc.lock().unwrap();
     if guard.is_none() {
         // Try to connect if not already
@@ -2947,7 +3476,9 @@ fn discord_update_presence(payload: DiscordPresencePayload, state: State<AppStat
                     .small_text(if payload.paused { "Paused" } else { "Playing" }),
             );
 
-        client.set_activity(act).map_err(|e| format!("Discord RPC: {}", e))?;
+        client
+            .set_activity(act)
+            .map_err(|e| format!("Discord RPC: {}", e))?;
     }
     Ok(())
 }
@@ -2959,6 +3490,656 @@ fn discord_clear_presence(state: State<AppState>) -> Result<(), String> {
         let _ = client.clear_activity();
     }
     Ok(())
+}
+
+fn get_local_ip() -> Option<std::net::IpAddr> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|addr| addr.ip())
+}
+
+async fn is_port_open(ip: &str, port: u16) -> bool {
+    let addr = if ip.contains(":") {
+        ip.to_string()
+    } else {
+        format!("{}:{}", ip, port)
+    };
+
+    if let Ok(socket_addrs) = tokio::net::lookup_host(&addr).await {
+        for socket_addr in socket_addrs {
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                std::time::Duration::from_millis(800),
+                tokio::net::TcpStream::connect(&socket_addr),
+            )
+            .await
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[tauri::command]
+async fn vlc_scan_devices() -> Result<Vec<String>, String> {
+    let local_ip = match get_local_ip() {
+        Some(std::net::IpAddr::V4(ip)) => ip,
+        _ => {
+            println!("[VLC Sync] Failed to detect local IPv4 address");
+            return Err(
+                "Could not detect local network interface. Make sure you are connected to Wi-Fi."
+                    .to_string(),
+            );
+        }
+    };
+
+    println!("[VLC Sync] Detected local IP: {:?}", local_ip);
+    let octets = local_ip.octets();
+    let subnet = format!("{}.{}.{}", octets[0], octets[1], octets[2]);
+    println!("[VLC Sync] Scanning subnet: {}.*", subnet);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .unwrap_or_default();
+
+    let mut tasks = Vec::new();
+
+    for i in 1..=254 {
+        if i == octets[3] {
+            continue;
+        }
+
+        let ip_str = format!("{}.{}", subnet, i);
+        let client_clone = client.clone();
+
+        tasks.push(tokio::spawn(async move {
+            for port in [80, 8080] {
+                if is_port_open(&ip_str, port).await {
+                    let url = format!("http://{}:{}/", ip_str, port);
+                    if let Ok(resp) = client_clone.get(&url).send().await {
+                        if resp.status().is_success() {
+                            if let Ok(text) = resp.text().await {
+                                if text.contains("<title>Sharing via Wi-Fi</title>") {
+                                    return Some(format!("{}:{}", ip_str, port));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }));
+    }
+
+    let mut found = Vec::new();
+    for task in tasks {
+        if let Ok(Some(device_ip)) = task.await {
+            println!("[VLC Sync] Discovered VLC device at: {}", device_ip);
+            found.push(device_ip);
+        }
+    }
+
+    if found.is_empty() {
+        println!("[VLC Sync] No active VLC Wi-Fi sharing servers found on subnet.");
+    } else {
+        println!("[VLC Sync] Total discovered devices: {:?}", found);
+    }
+
+    Ok(found)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct VlcTrack {
+    filename: String,
+    title: String,
+    artist: String,
+    ext: String,
+    thumbnail_url: Option<String>,
+    second_line: String,
+    artwork_missing: bool,
+    artist_missing: bool,
+    album: String,
+    album_missing: bool,
+    track_number: u32,
+}
+
+#[derive(Serialize, Deserialize)]
+struct VlcListResult {
+    files: Vec<VlcTrack>,
+    resolved_ip: String,
+}
+
+#[tauri::command]
+async fn vlc_list_files(ip: String) -> Result<VlcListResult, String> {
+    let overrides = load_vlc_overrides();
+    println!(
+        "[VLC Sync] Attempting connection check to VLC device at: {}",
+        ip
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut resolved_ip = ip.clone();
+    let root_url = if ip.contains(":") {
+        format!("http://{}/", ip)
+    } else {
+        if is_port_open(&ip, 80).await {
+            resolved_ip = format!("{}:80", ip);
+            println!("[VLC Sync] TCP test succeeded on port 80");
+            format!("http://{}:80/", ip)
+        } else if is_port_open(&ip, 8080).await {
+            resolved_ip = format!("{}:8080", ip);
+            println!("[VLC Sync] TCP test succeeded on port 8080");
+            format!("http://{}:8080/", ip)
+        } else {
+            println!("[VLC Sync] TCP check failed on port 80 and 8080. Defaulting to port 80");
+            resolved_ip = format!("{}:80", ip);
+            format!("http://{}:80/", ip)
+        }
+    };
+
+    println!("[VLC Sync] Connecting to root URL: {}", root_url);
+    let resp = client.get(&root_url).send().await.map_err(|e| {
+        use std::error::Error;
+        let mut err_chain = e.to_string();
+        let mut current = e.source();
+        while let Some(cause) = current {
+            err_chain = format!("{} -> {}", err_chain, cause);
+            current = cause.source();
+        }
+        let err_msg = format!(
+            "Could not reach VLC server at {}. Error details: {}",
+            root_url, err_chain
+        );
+        println!("[VLC Sync] Connection failed: {}", err_msg);
+        err_msg
+    })?;
+
+    if !resp.status().is_success() {
+        let err_msg = format!("VLC server returned error status code: {}", resp.status());
+        println!("[VLC Sync] Server rejected connection: {}", err_msg);
+        return Err(err_msg);
+    }
+
+    let html = resp.text().await.map_err(|e| {
+        let err_msg = format!("Failed to read VLC server response body: {}", e);
+        println!("[VLC Sync] Read response body failed: {}", err_msg);
+        err_msg
+    })?;
+
+    let mut files = Vec::new();
+    let mut search_idx = 0;
+    let mut current_album = "No Album".to_string();
+
+    while let Some(bg_pos) = html[search_idx..].find("background-image:url('") {
+        let abs_bg = search_idx + bg_pos;
+        let thumb_start = abs_bg + "background-image:url('".len();
+
+        let thumb_end = match html[thumb_start..].find("'") {
+            Some(pos) => thumb_start + pos,
+            None => break,
+        };
+
+        let raw_thumb = &html[thumb_start..thumb_end];
+        let mut thumbnail_url = None;
+        let mut artwork_missing = true;
+
+        if !raw_thumb.contains("(null)") && raw_thumb.starts_with("Thumbnail/") {
+            thumbnail_url = Some(raw_thumb.to_string());
+            artwork_missing = false;
+        }
+
+        // Check if next item is a folder or file
+        let next_a_pos = match html[thumb_end..].find("<a ") {
+            Some(pos) => thumb_end + pos,
+            None => {
+                search_idx = thumb_end;
+                continue;
+            }
+        };
+
+        let next_a_close = match html[next_a_pos..].find(">") {
+            Some(pos) => next_a_pos + pos,
+            None => break,
+        };
+
+        let a_tag = &html[next_a_pos..next_a_close];
+
+        if a_tag.contains("folder") || a_tag.contains("href=\"#\"") {
+            // It's a folder (Album)!
+            let first_line_pos = match html[next_a_close..].find("class=\"first-line\">") {
+                Some(pos) => next_a_close + pos + "class=\"first-line\">".len(),
+                None => {
+                    search_idx = next_a_close;
+                    continue;
+                }
+            };
+            let first_line_end = match html[first_line_pos..].find("<") {
+                Some(pos) => first_line_pos + pos,
+                None => break,
+            };
+            let album_name = html[first_line_pos..first_line_end].trim().to_string();
+            if album_name.is_empty() {
+                current_album = "Unknown Album".to_string();
+            } else {
+                current_album = album_name;
+            }
+            search_idx = first_line_end;
+        } else if a_tag.contains("href=\"download/") {
+            // It's a track!
+            let href_start = next_a_pos + a_tag.find("href=\"").unwrap() + "href=\"".len();
+            let href_end = match html[href_start..].find("\"") {
+                Some(pos) => href_start + pos,
+                None => break,
+            };
+            let download_path = &html[href_start..href_end];
+
+            // Extract the filename
+            let filename = if let Some(slash_pos) = download_path.rfind('/') {
+                let encoded_filename = &download_path[slash_pos + 1..];
+                if let Ok(decoded) = urlencoding::decode(encoded_filename) {
+                    decoded.into_owned()
+                } else {
+                    encoded_filename.to_string()
+                }
+            } else {
+                download_path.to_string()
+            };
+
+            // Parse first-line (title)
+            let first_line_pos = match html[href_end..].find("class=\"first-line\">") {
+                Some(pos) => href_end + pos + "class=\"first-line\">".len(),
+                None => {
+                    search_idx = href_end;
+                    continue;
+                }
+            };
+            let first_line_end = match html[first_line_pos..].find("<") {
+                Some(pos) => first_line_pos + pos,
+                None => break,
+            };
+            let _title_parsed = html[first_line_pos..first_line_end].trim().to_string();
+
+            // Parse second-line (subtitle)
+            let second_line_pos = match html[first_line_end..].find("class=\"second-line\">") {
+                Some(pos) => first_line_end + pos + "class=\"second-line\">".len(),
+                None => {
+                    search_idx = first_line_end;
+                    continue;
+                }
+            };
+            let second_line_end = match html[second_line_pos..].find("<") {
+                Some(pos) => second_line_pos + pos,
+                None => break,
+            };
+            let second_line = html[second_line_pos..second_line_end].trim().to_string();
+
+            // Derive artist and title from filename
+            let dot_idx = filename.rfind('.');
+            let base = if let Some(idx) = dot_idx {
+                &filename[..idx]
+            } else {
+                &filename
+            };
+            let ext = if let Some(idx) = dot_idx {
+                filename[idx + 1..].to_uppercase()
+            } else {
+                "UNKNOWN".to_string()
+            };
+
+            let parts: Vec<&str> = base.split(" - ").collect();
+            let mut artist = "Unknown Artist".to_string();
+            let mut title = base.to_string();
+            let mut artist_missing = true;
+            let mut track_number = 0;
+
+            let mut parts_iter = parts.iter().map(|s| s.trim()).filter(|s| !s.is_empty());
+            if let Some(first_part) = parts_iter.next() {
+                let is_track_num =
+                    !first_part.is_empty() && first_part.chars().all(|c| c.is_ascii_digit());
+                if is_track_num {
+                    if let Ok(parsed) = first_part.parse::<u32>() {
+                        track_number = parsed;
+                    }
+                    if let Some(second_part) = parts_iter.next() {
+                        artist = second_part.to_string();
+                        artist_missing = false;
+                        let remaining: Vec<&str> = parts_iter.collect();
+                        if !remaining.is_empty() {
+                            title = remaining.join(" - ");
+                        } else {
+                            title = "".to_string();
+                        }
+                    }
+                } else {
+                    artist = first_part.to_string();
+                    artist_missing = false;
+                    let remaining: Vec<&str> = parts_iter.collect();
+                    if !remaining.is_empty() {
+                        title = remaining.join(" - ");
+                    }
+                }
+            }
+
+            let mut title = title;
+            let mut artist = artist;
+            let mut album = current_album.clone();
+            let mut track_number = track_number;
+            let mut artwork_missing = artwork_missing;
+
+            if let Some(ovr) = overrides.get(&filename) {
+                title = ovr.title.clone();
+                artist = ovr.artist.clone();
+                album = ovr.album.clone();
+                track_number = ovr.track_number;
+                artwork_missing = false;
+            }
+
+            let artist_missing = artist == "Unknown Artist" || artist.is_empty();
+            let album_missing = album == "Unknown Album" || album == "No Album" || album.is_empty();
+
+            files.push(VlcTrack {
+                filename,
+                title,
+                artist,
+                ext,
+                thumbnail_url,
+                second_line,
+                artwork_missing,
+                artist_missing,
+                album,
+                album_missing,
+                track_number,
+            });
+
+            search_idx = second_line_end;
+        } else {
+            search_idx = next_a_close;
+        }
+    }
+
+    println!(
+        "[VLC Sync] Connected successfully. Stored library has {} files.",
+        files.len()
+    );
+    Ok(VlcListResult { files, resolved_ip })
+}
+
+#[tauri::command]
+async fn vlc_upload_file(ip: String, file_path: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let file_bytes =
+        std::fs::read(&file_path).map_err(|e| format!("Failed to read file from disk: {}", e))?;
+
+    let file_name = std::path::Path::new(&file_path)
+        .file_name()
+        .ok_or_else(|| "Invalid file path".to_string())?
+        .to_string_lossy()
+        .into_owned();
+
+    let part = reqwest::multipart::Part::bytes(file_bytes).file_name(file_name);
+
+    let form = reqwest::multipart::Form::new().part("files[]", part);
+
+    let url = if ip.contains(":") {
+        format!("http://{}/upload.json", ip)
+    } else {
+        format!("http://{}:80/upload.json", ip)
+    };
+
+    let resp = client
+        .post(&url)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Device rejected upload: {}", resp.status()));
+    }
+
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct VlcOverride {
+    title: String,
+    artist: String,
+    album: String,
+    track_number: u32,
+    thumbnail_url: Option<String>,
+}
+
+fn vlc_overrides_file() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("spotdl-gui");
+    let _ = std::fs::create_dir_all(&path);
+    path.push("vlc_metadata_overrides.json");
+    path
+}
+
+fn load_vlc_overrides() -> HashMap<String, VlcOverride> {
+    let path = vlc_overrides_file();
+    if path.is_file() {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            if let Ok(map) = serde_json::from_str(&content) {
+                return map;
+            }
+        }
+    }
+    HashMap::new()
+}
+
+fn save_vlc_overrides(map: &HashMap<String, VlcOverride>) {
+    let path = vlc_overrides_file();
+    if let Ok(content) = serde_json::to_string_pretty(map) {
+        let _ = std::fs::write(path, content);
+    }
+}
+
+#[tauri::command]
+async fn vlc_upload_downloaded_file(
+    ip: String,
+    filename: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let settings = state.settings.lock().unwrap().clone();
+    let download_dir = resolve_download_dir(&settings);
+    let file_path = download_dir.join(&filename);
+
+    if !file_path.is_file() {
+        return Err("File not found on disk".to_string());
+    }
+
+    let path_str = file_path.to_string_lossy().into_owned();
+    vlc_upload_file(ip, path_str).await
+}
+async fn vlc_delete_file(ip: String, filename: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let url = if ip.contains(":") {
+        format!("http://{}/delete", ip)
+    } else {
+        format!("http://{}:80/delete", ip)
+    };
+
+    let params = [("path", filename.clone())];
+
+    println!(
+        "[VLC Sync] Deleting file from VLC: {} via {}",
+        filename, url
+    );
+    let resp = client
+        .post(&url)
+        .form(&params)
+        .send()
+        .await
+        .map_err(|e| format!("Delete request failed: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("Device rejected delete: {}", resp.status()));
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn vlc_fix_track_metadata(
+    ip: String,
+    filename: String,
+    title: String,
+    artist: String,
+    album: String,
+    track_number: u32,
+    cover_url: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    use lofty::file::TaggedFileExt;
+    use lofty::prelude::*;
+
+    let settings = state.settings.lock().unwrap().clone();
+    let download_dir = resolve_download_dir(&settings);
+    let local_path = download_dir.join(&filename);
+
+    let working_path = if local_path.is_file() {
+        local_path.clone()
+    } else {
+        let url = if ip.contains(":") {
+            format!("http://{}/download/{}", ip, urlencoding::encode(&filename))
+        } else {
+            format!(
+                "http://{}:80/download/{}",
+                ip,
+                urlencoding::encode(&filename)
+            )
+        };
+
+        println!(
+            "[VLC Sync] File not found locally. Downloading from VLC: {}",
+            url
+        );
+        let client = reqwest::Client::new();
+        let bytes = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Failed to download track from VLC: {}", e))?
+            .bytes()
+            .await
+            .map_err(|e| format!("Failed to read track bytes from VLC: {}", e))?;
+
+        let temp_dir = std::env::temp_dir();
+        let temp_path = temp_dir.join(format!("vlc_temp_{}", filename));
+        std::fs::write(&temp_path, bytes)
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+
+        temp_path
+    };
+
+    let mut cover_bytes = None;
+    if let Some(ref url) = cover_url {
+        if !url.is_empty() {
+            println!("[VLC Sync] Fetching cover art from URL: {}", url);
+            let client = reqwest::Client::new();
+            if let Ok(resp) = client.get(url).send().await {
+                if resp.status().is_success() {
+                    if let Ok(bytes) = resp.bytes().await {
+                        cover_bytes = Some(bytes.to_vec());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut tagged_file = lofty::read_from_path(&working_path)
+        .map_err(|e| format!("Failed to parse audio tags: {}", e))?;
+
+    let tag = match tagged_file.primary_tag_mut() {
+        Some(tag) => tag,
+        None => {
+            if let Some(first_tag) = tagged_file.first_tag_mut() {
+                first_tag
+            } else {
+                let tag_type = tagged_file.primary_tag_type();
+                tagged_file.insert_tag(lofty::tag::Tag::new(tag_type));
+                tagged_file.primary_tag_mut().unwrap()
+            }
+        }
+    };
+
+    tag.set_title(title.clone());
+    tag.set_artist(artist.clone());
+    tag.set_album(album.clone());
+    tag.set_track(track_number);
+
+    if let Some(art) = cover_bytes {
+        use lofty::picture::{MimeType, Picture, PictureType};
+        tag.remove_picture_type(PictureType::CoverFront);
+        let picture = Picture::unchecked(art)
+            .pic_type(PictureType::CoverFront)
+            .mime_type(MimeType::Jpeg)
+            .build();
+        tag.push_picture(picture);
+    }
+
+    tagged_file
+        .save_to_path(&working_path, lofty::config::WriteOptions::default())
+        .map_err(|e| format!("Failed to save tag changes to audio file: {}", e))?;
+
+    // Determine the extension and construct the new clean filename
+    let ext = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("m4a");
+    let clean_artist = sanitize_filename(&artist);
+    let clean_title = sanitize_filename(&title);
+    let new_filename = format!("{} - {}.{}", clean_artist, clean_title, ext);
+
+    // Save to local overrides database so the PC app's parsed library view updates immediately!
+    let mut overrides = load_vlc_overrides();
+    overrides.remove(&filename); // remove old key if filename changed
+    overrides.insert(
+        new_filename.clone(),
+        VlcOverride {
+            title: title.clone(),
+            artist: artist.clone(),
+            album: album.clone(),
+            track_number,
+            thumbnail_url: cover_url.clone(),
+        },
+    );
+    save_vlc_overrides(&overrides);
+
+    // Create a temporary copy with the new filename in temp dir
+    let temp_dir = std::env::temp_dir();
+    let upload_path = temp_dir.join(format!("vlc_upload_{}", new_filename));
+    std::fs::copy(&working_path, &upload_path)
+        .map_err(|e| format!("Failed to prepare upload copy: {}", e))?;
+
+    println!("[VLC Sync] Deleting old file on VLC iOS: {}", filename);
+    let _ = vlc_delete_file(ip.clone(), filename.clone()).await;
+
+    println!("[VLC Sync] Uploading new file to VLC iOS: {}", new_filename);
+    let path_str = upload_path.to_string_lossy().into_owned();
+    let upload_res = vlc_upload_file(ip, path_str).await;
+
+    let _ = std::fs::remove_file(&upload_path);
+
+    if working_path != local_path {
+        let _ = std::fs::remove_file(&working_path);
+    }
+
+    upload_res
 }
 
 // ---------- App Entry ----------
@@ -2981,37 +4162,43 @@ pub fn run() {
 
             // Create the tray icon
             if let Some(icon) = app.default_window_icon() {
-                let quit_i = tauri::menu::MenuItem::with_id(app, "quit", "Quit SpotDL GUI", true, None::<&str>)?;
-                let show_i = tauri::menu::MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
+                let quit_i = tauri::menu::MenuItem::with_id(
+                    app,
+                    "quit",
+                    "Quit SpotDL GUI",
+                    true,
+                    None::<&str>,
+                )?;
+                let show_i =
+                    tauri::menu::MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
                 let menu = tauri::menu::Menu::with_items(app, &[&show_i, &quit_i])?;
 
                 let _tray = tauri::tray::TrayIconBuilder::new()
                     .icon(icon.clone())
                     .menu(&menu)
                     .show_menu_on_left_click(false)
-                    .on_menu_event(|app, event| {
-                        match event.id.as_ref() {
-                            "quit" => {
-                                app.exit(0);
-                            }
-                            "show" => {
-                                if let Some(window) = app.get_webview_window("main") {
-                                    let _ = window.show();
-                                    if window.is_minimized().unwrap_or(false) {
-                                        let _ = window.unminimize();
-                                    }
-                                    let _ = window.set_focus();
-                                }
-                            }
-                            _ => {}
+                    .on_menu_event(|app, event| match event.id.as_ref() {
+                        "quit" => {
+                            app.exit(0);
                         }
+                        "show" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                if window.is_minimized().unwrap_or(false) {
+                                    let _ = window.unminimize();
+                                }
+                                let _ = window.set_focus();
+                            }
+                        }
+                        _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
                         if let tauri::tray::TrayIconEvent::Click {
                             button: tauri::tray::MouseButton::Left,
                             button_state: tauri::tray::MouseButtonState::Up,
                             ..
-                        } = event {
+                        } = event
+                        {
                             let app = tray.app_handle();
                             if let Some(window) = app.get_webview_window("main") {
                                 let _ = window.show();
@@ -3048,6 +4235,7 @@ pub fn run() {
         .manage(AppState {
             settings: Mutex::new(settings),
             discord_rpc: Mutex::new(discord),
+            cache_download_locks: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             download_song,
@@ -3077,6 +4265,7 @@ pub fn run() {
             get_downloaded_keys,
             get_download_index,
             get_downloads_info,
+            fix_downloads_metadata,
             open_downloads_directory,
             open_cache_directory,
             get_storage_paths_status,
@@ -3106,6 +4295,11 @@ pub fn run() {
             add_to_history,
             clear_history,
             import_history,
+            vlc_scan_devices,
+            vlc_list_files,
+            vlc_upload_file,
+            vlc_upload_downloaded_file,
+            vlc_fix_track_metadata,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

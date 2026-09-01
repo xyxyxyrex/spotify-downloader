@@ -9,6 +9,7 @@ SCRIPTS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "scripts")
 
 YT_DLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 SPOTDL_URL = "https://github.com/spotDL/spotify-downloader/releases/download/v4.2.9/spotdl-4.2.9-win32.exe"
+FORCE_UPDATE = "--update" in sys.argv
 
 def ensure_bin_dir():
     if not os.path.exists(BIN_DIR):
@@ -114,7 +115,7 @@ def main():
     ensure_bin_dir()
     
     # Download precompiled binaries if missing
-    if not os.path.exists(os.path.join(BIN_DIR, "yt-dlp.exe")):
+    if FORCE_UPDATE or not os.path.exists(os.path.join(BIN_DIR, "yt-dlp.exe")):
         download_file(YT_DLP_URL, "yt-dlp.exe")
     else:
         print("yt-dlp.exe already exists, skipping download.")
@@ -124,7 +125,7 @@ def main():
     else:
         print("spotdl.exe already exists, skipping download.")
         
-    if not (os.path.exists(os.path.join(BIN_DIR, "ffmpeg.exe")) and os.path.exists(os.path.join(BIN_DIR, "ffprobe.exe"))):
+    if FORCE_UPDATE or not (os.path.exists(os.path.join(BIN_DIR, "ffmpeg.exe")) and os.path.exists(os.path.join(BIN_DIR, "ffprobe.exe"))):
         download_and_extract_ffmpeg()
     else:
         print("ffmpeg/ffprobe already exist, skipping download.")

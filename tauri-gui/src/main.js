@@ -48,10 +48,7 @@ import {
     renderProfilePage,
 } from "./components/profile.js";
 
-import {
-    loadSettingsUI,
-    setupSettings,
-} from "./components/settings.js";
+import { loadSettingsUI, setupSettings } from "./components/settings.js";
 import {
     fetchiTunesCoverArt,
     resolveTrackCoverUrl,
@@ -346,8 +343,14 @@ window.audioPlayer = audioPlayer;
 window.seekAudio = (seconds) => {
     if (audioPlayer && Number.isFinite(seconds)) {
         const targetSec = Number(seconds);
-        if (typeof isLivePlaybackActive === "function" && isLivePlaybackActive()) {
-            const dur = typeof playbackDurationSeconds === "function" ? playbackDurationSeconds() : 0;
+        if (
+            typeof isLivePlaybackActive === "function" &&
+            isLivePlaybackActive()
+        ) {
+            const dur =
+                typeof playbackDurationSeconds === "function"
+                    ? playbackDurationSeconds()
+                    : 0;
             if (dur > 0 && typeof seekLiveStreamAtRatio === "function") {
                 const ratio = targetSec / dur;
                 void seekLiveStreamAtRatio(ratio);
@@ -355,7 +358,10 @@ window.seekAudio = (seconds) => {
             }
         }
         if (Number.isFinite(audioPlayer.duration) && audioPlayer.duration > 0) {
-            audioPlayer.currentTime = Math.max(0, Math.min(targetSec, audioPlayer.duration));
+            audioPlayer.currentTime = Math.max(
+                0,
+                Math.min(targetSec, audioPlayer.duration),
+            );
         } else {
             audioPlayer.currentTime = targetSec;
         }
@@ -395,10 +401,10 @@ function updateDiscordPresence(song, paused = false) {
             imageUrl: song.image || null,
             paused,
         },
-    }).catch(() => { });
+    }).catch(() => {});
 }
 function clearDiscordPresence() {
-    invoke("discord_clear_presence").catch(() => { });
+    invoke("discord_clear_presence").catch(() => {});
 }
 let metadataRequestId = 0;
 let lyricsRequestId = 0;
@@ -406,10 +412,19 @@ let detailLyricsSongKey = null;
 
 const LAST_SESSION_KEY = "spotdl_gui_last_played";
 let downloadedKeys = new Set();
+let vlcConnectedIp = localStorage.getItem("vlc_connected_ip") || "";
+let vlcFileNames = new Set();
+let vlcTracks = [];
+let wasVlcConnected = false;
 /** @type {Map<string, { playbackUrl: string, filePath: string, fileName: string }>} */
 const audioPrefetchByKey = new Map();
 const audioPrefetchInflight = new Set();
 const backgroundCacheInflight = new Set();
+const backgroundCacheQueue = new Map();
+const BACKGROUND_CACHE_CONCURRENCY = 1;
+let backgroundCacheActive = 0;
+let backgroundCacheSequence = 0;
+let neighborPrefetchTimer = null;
 const LIVE_STREAM_BASE = "http://127.0.0.1:8000/stream";
 let isBuffering = false;
 
@@ -441,6 +456,7 @@ const views = {
     album: document.getElementById("view-album"),
     profile: document.getElementById("view-profile"),
     plugins: document.getElementById("view-plugins"),
+    iphone: document.getElementById("view-iphone"),
 };
 
 const navs = {
@@ -450,6 +466,7 @@ const navs = {
     downloads: document.getElementById("nav-downloads"),
     profile: document.getElementById("nav-profile-btn"),
     plugins: document.getElementById("nav-plugins"),
+    iphone: document.getElementById("nav-iphone"),
 };
 
 const searchInput = document.getElementById("search-input");
@@ -925,7 +942,7 @@ function promptSaveQueueAsPlaylist() {
         showModal(
             "Save Queue",
             "<p>The queue is empty!</p>",
-            () => { },
+            () => {},
             "OK",
             false,
         );
@@ -953,7 +970,7 @@ function promptSaveQueueAsPlaylist() {
                 showModal(
                     "Invalid Name",
                     "<p>Playlist name cannot be empty!</p>",
-                    () => { },
+                    () => {},
                     "OK",
                     false,
                 );
@@ -1000,9 +1017,9 @@ async function updateQueueRecommendations(force = false) {
                 );
                 const randomRecent =
                     historyList[
-                    Math.floor(
-                        Math.random() * Math.min(5, historyList.length),
-                    )
+                        Math.floor(
+                            Math.random() * Math.min(5, historyList.length),
+                        )
                     ];
                 if (randomRecent) {
                     seedSong = {
@@ -1194,6 +1211,7 @@ function cloneSongForQueue(song) {
 
 /** Set the list used for next/previous and mirror it in the queue panel. */
 function setPlaybackQueue(songs, startSong) {
+    backgroundCacheQueue.clear();
     appQueue = (songs || []).map(cloneSongForQueue);
     if (!appQueue.length) {
         queueIndex = -1;
@@ -1209,7 +1227,6 @@ function setPlaybackQueue(songs, startSong) {
         queueIndex = 0;
     }
     renderQueueUI();
-    queueMicrotask(() => prefetchQueueNeighbors());
 }
 
 function resolvePlaybackQueueForSong(song, explicitQueue) {
@@ -1726,7 +1743,10 @@ function refreshContextMenuForSong(song) {
 
 function refreshContextMenuForGroup(group) {
     const dlGroup = document.getElementById("cm-download-group");
-    dlGroup.textContent = `Download ${group.type === "album" ? "Album" : "Playlist"}`;
+    const dlGroupText = document.getElementById("cm-download-group-text");
+    if (dlGroupText) {
+        dlGroupText.textContent = `Download ${group.type === "album" ? "Album" : "Playlist"}`;
+    }
     dlGroup.classList.remove("hidden");
     document.getElementById("cm-download").classList.add("hidden");
     document.getElementById("cm-queue").classList.add("hidden");
@@ -1738,7 +1758,8 @@ function refreshContextMenuForGroup(group) {
     // Toggle Rename Playlist option
     const renameCmItem = document.getElementById("cm-rename-playlist");
     if (renameCmItem) {
-        const isUserPlaylist = group.type === "playlist" && !isLikedPlaylist(group.id);
+        const isUserPlaylist =
+            group.type === "playlist" && !isLikedPlaylist(group.id);
         renameCmItem.classList.toggle("hidden", !isUserPlaylist);
     }
 }
@@ -2048,7 +2069,8 @@ async function openArtistPage(artistName, opts = {}) {
     const albumsEl = document.getElementById("artist-albums-grid");
 
     nameEl.textContent = name;
-    metaEl.innerHTML = '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 140px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
+    metaEl.innerHTML =
+        '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 140px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
     artEl.innerHTML = "";
     tracksEl.innerHTML = getTrackListSkeletonHTML(5);
     albumsEl.innerHTML = getAlbumGridSkeletonHTML(4);
@@ -2257,7 +2279,8 @@ async function openAlbumPage(albumTitle, artistName, opts = {}) {
     artistEl.replaceChildren(
         artist ? artistLinkEl(artist) : document.createTextNode("—"),
     );
-    metaEl.innerHTML = '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 160px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
+    metaEl.innerHTML =
+        '<span class="skeleton-shimmer skeleton-pulse-wrap" style="width: 160px; height: 13px; border-radius: 4px; display: inline-block; vertical-align: middle;"></span>';
     artEl.innerHTML = "";
     tracksEl.innerHTML = getTrackListSkeletonHTML(8);
     selectedGroup = null;
@@ -2441,8 +2464,8 @@ function downloadTrackKey(song) {
     return `${String(song.artist || "")
         .trim()
         .toLowerCase()}|${String(song.title || "")
-            .trim()
-            .toLowerCase()}`;
+        .trim()
+        .toLowerCase()}`;
 }
 
 function isSongDownloaded(song) {
@@ -2502,8 +2525,8 @@ async function loadAudioFileAsBlob(filePath) {
         ext === "m4a"
             ? "audio/mp4"
             : ext === "ogg"
-                ? "audio/ogg"
-                : "audio/mpeg";
+              ? "audio/ogg"
+              : "audio/mpeg";
     return URL.createObjectURL(
         new Blob([new Uint8Array(bytes)], { type: mime }),
     );
@@ -2648,7 +2671,7 @@ async function seekLiveStreamAtRatio(ratio) {
     if (!currentSong || !isLivePlaybackActive()) return;
 
     if (seekViaCachePromise) {
-        await seekViaCachePromise.catch(() => { });
+        await seekViaCachePromise.catch(() => {});
     }
 
     const playId = activePlayId;
@@ -2700,7 +2723,44 @@ async function seekLiveStreamAtRatio(ratio) {
     seekViaCachePromise = null;
 }
 
-function startBackgroundCache(song) {
+function drainBackgroundCacheQueue() {
+    while (
+        backgroundCacheActive < BACKGROUND_CACHE_CONCURRENCY &&
+        backgroundCacheQueue.size
+    ) {
+        const [key, job] = [...backgroundCacheQueue.entries()].sort(
+            (a, b) =>
+                b[1].priority - a[1].priority ||
+                a[1].sequence - b[1].sequence,
+        )[0];
+        backgroundCacheQueue.delete(key);
+
+        if (
+            isSongDownloaded(job.song) ||
+            audioPrefetchByKey.has(key) ||
+            backgroundCacheInflight.has(key)
+        ) {
+            continue;
+        }
+
+        backgroundCacheActive += 1;
+        backgroundCacheInflight.add(key);
+        invoke("stream_song", streamSongInvokeArgs(job.song, true))
+            .then((info) => {
+                cachePlaybackEntry(key, info.file_path, info.file_name);
+            })
+            .catch((err) => {
+                console.warn("Background cache failed:", err);
+            })
+            .finally(() => {
+                backgroundCacheActive = Math.max(0, backgroundCacheActive - 1);
+                backgroundCacheInflight.delete(key);
+                drainBackgroundCacheQueue();
+            });
+    }
+}
+
+function startBackgroundCache(song, priority = 0) {
     if (!song?.title || !song?.artist) return;
     const key = downloadTrackKey(song);
     if (
@@ -2710,17 +2770,18 @@ function startBackgroundCache(song) {
     ) {
         return;
     }
-    backgroundCacheInflight.add(key);
-    invoke("stream_song", streamSongInvokeArgs(song, true))
-        .then((info) => {
-            cachePlaybackEntry(key, info.file_path, info.file_name);
-        })
-        .catch((err) => {
-            console.warn("Background cache failed:", err);
-        })
-        .finally(() => {
-            backgroundCacheInflight.delete(key);
+
+    const queued = backgroundCacheQueue.get(key);
+    if (queued) {
+        queued.priority = Math.max(queued.priority, priority);
+    } else {
+        backgroundCacheQueue.set(key, {
+            song,
+            priority,
+            sequence: backgroundCacheSequence++,
         });
+    }
+    drainBackgroundCacheQueue();
 }
 
 function cachePreviousSongIfNeeded(song) {
@@ -2731,7 +2792,9 @@ function cachePreviousSongIfNeeded(song) {
     ) {
         return;
     }
-    startBackgroundCache(song);
+    // A live stream writes itself to disk. Refresh the in-memory playback map
+    // after it ends without starting a second network download.
+    void prefetchAudioForSong(song);
 }
 
 function prefetchQueueNeighbors() {
@@ -2740,23 +2803,20 @@ function prefetchQueueNeighbors() {
     keep.add(downloadTrackKey(appQueue[queueIndex]));
     if (currentSong) keep.add(downloadTrackKey(currentSong));
 
-    const indices = new Set([
-        queueIndex,
-        getNextQueueIndex(),
-        getPrevQueueIndex(),
-    ]);
-    for (let n = 1; n <= 5; n++) {
-        const idx = queueIndex + n;
-        if (idx < appQueue.length) indices.add(idx);
-        if (
-            loopMode === "all" &&
-            n === 1 &&
-            queueIndex + n >= appQueue.length
-        ) {
-            indices.add(0);
-        }
+    const indices = new Set([queueIndex]);
+    const firstNext = getNextQueueIndex();
+    if (firstNext >= 0) indices.add(firstNext);
+    if (!shuffleOn && firstNext >= 0 && appQueue.length > 1) {
+        const secondNext =
+            firstNext + 1 < appQueue.length
+                ? firstNext + 1
+                : loopMode === "all"
+                  ? 0
+                  : -1;
+        if (secondNext >= 0) indices.add(secondNext);
     }
 
+    let priority = 20;
     for (const idx of indices) {
         if (idx < 0 || idx >= appQueue.length || idx === queueIndex) continue;
         const neighbor = appQueue[idx];
@@ -2764,10 +2824,22 @@ function prefetchQueueNeighbors() {
         if (isSongDownloaded(neighbor)) {
             prefetchAudioForSong(neighbor);
         } else {
-            startBackgroundCache(neighbor);
+            startBackgroundCache(neighbor, priority--);
         }
     }
+
+    for (const key of backgroundCacheQueue.keys()) {
+        if (!keep.has(key)) backgroundCacheQueue.delete(key);
+    }
     trimAudioPrefetch(keep);
+}
+
+function scheduleQueuePrefetch(delayMs = 1200) {
+    if (neighborPrefetchTimer) clearTimeout(neighborPrefetchTimer);
+    neighborPrefetchTimer = setTimeout(() => {
+        neighborPrefetchTimer = null;
+        prefetchQueueNeighbors();
+    }, delayMs);
 }
 
 function normalizePlaybackSrc(url) {
@@ -2976,10 +3048,10 @@ function renderDownloadsActivity() {
         queuedCount > 0 && activeCount > 0
             ? `${activeCount} active, ${queuedCount} queued`
             : queuedCount > 0
-                ? `${queuedCount} queued`
-                : entries.length === 1
-                    ? "1 track in progress"
-                    : `${entries.length} tracks in progress`;
+              ? `${queuedCount} queued`
+              : entries.length === 1
+                ? "1 track in progress"
+                : `${entries.length} tracks in progress`;
     list.innerHTML = "";
 
     entries
@@ -3079,12 +3151,50 @@ function uniqueSongsByDownloadKey(songs) {
     return unique;
 }
 
-async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
-    const queue = uniqueSongsByDownloadKey(songs).filter((song) => !isSongDownloaded(song));
+async function downloadSongsWithConcurrency(
+    songs,
+    maxConcurrent = 2,
+    toIphone = false,
+) {
+    if (toIphone && !vlcConnectedIp) {
+        showModal(
+            "VLC Connection Required",
+            "<p>Please connect to your iOS device first using the 'Connect VLC' dropdown at the top of the app.</p>",
+        );
+        return;
+    }
+
+    const queue = uniqueSongsByDownloadKey(songs).filter(
+        (song) => !isSongDownloaded(song),
+    );
     if (!queue.length) {
-        statusBar.textContent = songs.length === 1
-            ? "Track is already downloaded locally."
-            : "All tracks are already downloaded locally.";
+        if (toIphone) {
+            statusBar.textContent = `Syncing ${songs.length} already downloaded tracks to iPhone...`;
+            try {
+                const downloadIndex = await invoke("get_download_index");
+                for (const song of songs) {
+                    const key = downloadTrackKey(song);
+                    const filename = downloadIndex[key];
+                    if (filename) {
+                        statusBar.textContent = `Uploading ${filename} to iPhone...`;
+                        await invoke("vlc_upload_downloaded_file", {
+                            ip: vlcConnectedIp,
+                            filename: filename,
+                        });
+                        if (vlcFileNames) vlcFileNames.add(filename);
+                    }
+                }
+                statusBar.textContent = `Finished syncing tracks to iPhone.`;
+            } catch (err) {
+                console.error("Sync failed", err);
+                statusBar.textContent = `Sync failed: ${err}`;
+            }
+        } else {
+            statusBar.textContent =
+                songs.length === 1
+                    ? "Track is already downloaded locally."
+                    : "All tracks are already downloaded locally.";
+        }
         return;
     }
 
@@ -3112,7 +3222,26 @@ async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
             }
 
             try {
-                await downloadSongWithMetadata(song);
+                const savedPath = await downloadSongWithMetadata(song);
+                if (toIphone && savedPath) {
+                    let filename = "";
+                    if (savedPath.includes("\\")) {
+                        filename = savedPath.substring(
+                            savedPath.lastIndexOf("\\") + 1,
+                        );
+                    } else {
+                        filename = savedPath.substring(
+                            savedPath.lastIndexOf("/") + 1,
+                        );
+                    }
+                    setSongDownloadActivity(song, "Syncing to iPhone");
+                    await invoke("vlc_upload_downloaded_file", {
+                        ip: vlcConnectedIp,
+                        filename: filename,
+                    });
+                    if (vlcFileNames) vlcFileNames.add(filename);
+                    clearSongDownloadActivity(song);
+                }
             } catch (err) {
                 console.error("Failed downloading track", song, err);
             } finally {
@@ -3124,6 +3253,9 @@ async function downloadSongsWithConcurrency(songs, maxConcurrent = 2) {
     });
 
     await Promise.all(workers);
+    if (toIphone) {
+        statusBar.textContent = `Finished syncing downloaded tracks to iPhone.`;
+    }
 }
 
 async function updateNowPlayingDownloadBadge(song) {
@@ -3196,6 +3328,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     setupPlaylists();
     initCustomDragSystem();
     setupProfilePage();
+    setupVlcSync();
 
     document.getElementById("btn-clear-queue").addEventListener("click", () => {
         appQueue = [];
@@ -3242,8 +3375,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 export async function handleAppClose() {
     try {
         const settings = await invoke("get_settings");
-        const behavior = settings.closeBehavior ?? settings.close_behavior ?? "prompt";
-        
+        const behavior =
+            settings.closeBehavior ?? settings.close_behavior ?? "prompt";
+
         if (behavior === "minimize") {
             await invoke("window_hide");
             return;
@@ -3284,9 +3418,12 @@ export async function handleAppClose() {
             "Close Application",
             bodyHtml,
             async () => {
-                const actionInput = document.querySelector('input[name="close-action"]:checked');
+                const actionInput = document.querySelector(
+                    'input[name="close-action"]:checked',
+                );
                 const action = actionInput ? actionInput.value : "minimize";
-                const remember = document.getElementById("close-remember")?.checked || false;
+                const remember =
+                    document.getElementById("close-remember")?.checked || false;
 
                 if (remember) {
                     try {
@@ -3295,12 +3432,17 @@ export async function handleAppClose() {
                                 closeBehavior: action,
                             },
                         });
-                        const selectEl = document.getElementById("close-behavior-select");
+                        const selectEl = document.getElementById(
+                            "close-behavior-select",
+                        );
                         if (selectEl) {
                             selectEl.value = action;
                         }
                     } catch (err) {
-                        console.error("Failed to save close behavior setting:", err);
+                        console.error(
+                            "Failed to save close behavior setting:",
+                            err,
+                        );
                     }
                 }
 
@@ -3311,7 +3453,7 @@ export async function handleAppClose() {
                 }
             },
             "Confirm",
-            true
+            true,
         );
     } catch (err) {
         console.error("Error during app close handler:", err);
@@ -3347,7 +3489,10 @@ function setupTitleBar() {
 
     // Double-click to toggle maximize
     titlebar?.addEventListener("dblclick", async (e) => {
-        if (e.target.closest(".titlebar-actions") || e.target.closest(".titlebar-btn")) {
+        if (
+            e.target.closest(".titlebar-actions") ||
+            e.target.closest(".titlebar-btn")
+        ) {
             return;
         }
         try {
@@ -3360,7 +3505,10 @@ function setupTitleBar() {
     titlebar?.addEventListener("mousedown", (e) => {
         // Only trigger on left-click and don't trigger if clicked on buttons
         if (e.button !== 0) return;
-        if (e.target.closest(".titlebar-actions") || e.target.closest(".titlebar-btn")) {
+        if (
+            e.target.closest(".titlebar-actions") ||
+            e.target.closest(".titlebar-btn")
+        ) {
             return;
         }
 
@@ -3384,7 +3532,7 @@ function setupTitleBar() {
                         screenX: Math.round(moveEvent.screenX * scale),
                         screenY: Math.round(moveEvent.screenY * scale),
                         restoredWidth: restoredWidth,
-                        restoredHeight: restoredHeight
+                        restoredHeight: restoredHeight,
                     });
                 } catch (err) {
                     console.error("Drag start failed:", err);
@@ -3499,9 +3647,16 @@ async function checkAppUpdates() {
 
                         let detail = err?.message || String(err);
                         let friendlyMsg = `Failed to install update: ${detail}`;
-                        if (detail.includes("404") || detail.toLowerCase().includes("not found")) {
+                        if (
+                            detail.includes("404") ||
+                            detail.toLowerCase().includes("not found")
+                        ) {
                             friendlyMsg = `Update download failed (404 Not Found).\nThe installer setup file is not available on the GitHub Release page yet or the release was not made public. Please try again in a few minutes.`;
-                        } else if (detail.toLowerCase().includes("signature") || detail.toLowerCase().includes("minisign") || detail.toLowerCase().includes("verify")) {
+                        } else if (
+                            detail.toLowerCase().includes("signature") ||
+                            detail.toLowerCase().includes("minisign") ||
+                            detail.toLowerCase().includes("verify")
+                        ) {
                             friendlyMsg = `Update signature verification failed.\nThe downloaded package might be tampered with or is signed with a private key that does not match the configured public key.`;
                         }
                         alert(friendlyMsg);
@@ -3563,7 +3718,10 @@ function setupPlayer() {
         // Auto-heal missing metadata in playlists using actual playing file metadata
         const durationSecs = Math.round(audioPlayer.duration);
         if (durationSecs > 0 && currentSong) {
-            if (!currentSong.duration || currentSong.duration !== durationSecs) {
+            if (
+                !currentSong.duration ||
+                currentSong.duration !== durationSecs
+            ) {
                 currentSong.duration = durationSecs;
             }
             let changed = false;
@@ -3571,20 +3729,38 @@ function setupPlayer() {
             for (const pl of pls) {
                 pl.tracks.forEach((track) => {
                     if (
-                        track.title && currentSong.title &&
-                        track.artist && currentSong.artist &&
-                        track.title.toLowerCase().trim() === currentSong.title.toLowerCase().trim() &&
-                        track.artist.toLowerCase().trim() === currentSong.artist.toLowerCase().trim()
+                        track.title &&
+                        currentSong.title &&
+                        track.artist &&
+                        currentSong.artist &&
+                        track.title.toLowerCase().trim() ===
+                            currentSong.title.toLowerCase().trim() &&
+                        track.artist.toLowerCase().trim() ===
+                            currentSong.artist.toLowerCase().trim()
                     ) {
-                        if (!track.duration_secs || track.duration_secs !== durationSecs) {
+                        if (
+                            !track.duration_secs ||
+                            track.duration_secs !== durationSecs
+                        ) {
                             track.duration_secs = durationSecs;
                             changed = true;
                         }
-                        if (currentSong.album && (!track.album || track.album === "—" || track.album === "-")) {
+                        if (
+                            currentSong.album &&
+                            (!track.album ||
+                                track.album === "—" ||
+                                track.album === "-")
+                        ) {
                             track.album = currentSong.album;
                             changed = true;
                         }
-                        if (currentSong.image && (!track.image || track.image.includes("2a96cbd8b46e442fc41c2b86b821562f"))) {
+                        if (
+                            currentSong.image &&
+                            (!track.image ||
+                                track.image.includes(
+                                    "2a96cbd8b46e442fc41c2b86b821562f",
+                                ))
+                        ) {
                             track.image = currentSong.image;
                             changed = true;
                         }
@@ -3811,6 +3987,11 @@ function setupNavigation() {
         e.preventDefault();
         switchView("plugins");
     });
+    navs.iphone?.addEventListener("click", (e) => {
+        e.preventDefault();
+        switchView("iphone");
+        renderIphoneView();
+    });
     document
         .getElementById("nav-profile-btn")
         ?.addEventListener("click", () => {
@@ -3818,12 +3999,14 @@ function setupNavigation() {
             renderProfilePage();
         });
 
-    document.getElementById("playlist-rename-btn")?.addEventListener("click", () => {
-        const activeId = getActivePlaylistId();
-        if (activeId) {
-            triggerRenamePlaylistFlow(activeId);
-        }
-    });
+    document
+        .getElementById("playlist-rename-btn")
+        ?.addEventListener("click", () => {
+            const activeId = getActivePlaylistId();
+            if (activeId) {
+                triggerRenamePlaylistFlow(activeId);
+            }
+        });
 }
 
 function triggerRenamePlaylistFlow(playlistId) {
@@ -3835,7 +4018,9 @@ function triggerRenamePlaylistFlow(playlistId) {
         `<p style="margin-bottom: 0.5rem; font-size: 1.05rem;">Enter a new name for <strong>${escapeHtml(pl.name)}</strong>:</p>
          <input type="text" id="modal-playlist-rename-input" placeholder="New name..." value="${escapeHtml(pl.name)}" autocomplete="off">`,
         async () => {
-            const input = document.getElementById("modal-playlist-rename-input");
+            const input = document.getElementById(
+                "modal-playlist-rename-input",
+            );
             const newName = input.value.trim();
             if (!newName) return false;
             try {
@@ -3878,7 +4063,7 @@ function initAudioVisualizer() {
             )();
             analyser = audioContext.createAnalyser();
             const source = audioContext.createMediaElementSource(audioPlayer);
-            
+
             // Connect through Equalizer filter chain
             let lastNode = source;
             eqFilters.clear();
@@ -3886,16 +4071,16 @@ function initAudioVisualizer() {
                 const filter = audioContext.createBiquadFilter();
                 filter.type = EQ_TYPES[idx];
                 filter.frequency.value = freq;
-                
+
                 // Load gain value from localStorage or default to 0
                 const saved = localStorage.getItem(`spotdl_eq_gain_${freq}`);
                 filter.gain.value = saved !== null ? parseFloat(saved) : 0;
-                
+
                 eqFilters.set(freq, filter);
                 lastNode.connect(filter);
                 lastNode = filter;
             });
-            
+
             lastNode.connect(analyser);
             analyser.connect(audioContext.destination);
             analyser.fftSize = 64;
@@ -3927,7 +4112,7 @@ function initAudioVisualizer() {
                     getComputedStyle(document.documentElement)
                         .getPropertyValue("--accent")
                         .trim() || "#1db954";
-            } catch (e) { }
+            } catch (e) {}
 
             const barWidth = 3;
             let x = 0;
@@ -3969,28 +4154,30 @@ function clearActiveDragGhost() {
         if (activeCustomDrag.ghostEl) {
             try {
                 activeCustomDrag.ghostEl.remove();
-            } catch (e) { }
+            } catch (e) {}
         }
         try {
             activeCustomDrag.element.classList.remove("dragging");
-        } catch (e) { }
+        } catch (e) {}
         activeCustomDrag = null;
     }
     document.querySelectorAll(".drag-ghost").forEach((el) => {
         try {
             el.remove();
-        } catch (e) { }
+        } catch (e) {}
     });
     document.querySelectorAll("#playlist-list li").forEach((li) => {
         try {
             li.classList.remove("drag-over");
-        } catch (e) { }
+        } catch (e) {}
     });
 }
 
 function createCustomDragGhost(drag, x, y) {
     document.querySelectorAll(".drag-ghost").forEach((el) => {
-        try { el.remove(); } catch (err) { }
+        try {
+            el.remove();
+        } catch (err) {}
     });
 
     const ghost = document.createElement("div");
@@ -4077,36 +4264,44 @@ function initCustomDragSystem() {
     // Intercept dragover in the capturing phase at window level.
     // This allows us to call e.preventDefault() before anything else can interfere,
     // guaranteeing the cursor will show the valid 'copy' or 'move' pointer everywhere.
-    window.addEventListener("dragover", (e) => {
-        if (activeCustomDrag && activeCustomDrag.dragStarted) {
-            e.preventDefault();
+    window.addEventListener(
+        "dragover",
+        (e) => {
+            if (activeCustomDrag && activeCustomDrag.dragStarted) {
+                e.preventDefault();
 
-            // Select matching drop effect (copy for playlists, move for track reordering)
-            const targetRow = e.target.closest("#playlist-tracks-body tr");
-            if (targetRow && activeCustomDrag.element && activeCustomDrag.element.tagName === "TR") {
-                e.dataTransfer.dropEffect = "move";
-            } else {
-                e.dataTransfer.dropEffect = "copy";
+                // Select matching drop effect (copy for playlists, move for track reordering)
+                const targetRow = e.target.closest("#playlist-tracks-body tr");
+                if (
+                    targetRow &&
+                    activeCustomDrag.element &&
+                    activeCustomDrag.element.tagName === "TR"
+                ) {
+                    e.dataTransfer.dropEffect = "move";
+                } else {
+                    e.dataTransfer.dropEffect = "copy";
+                }
+
+                if (activeCustomDrag.ghostEl) {
+                    // Offset by 15px to bottom-right to prevent the element from blocking standard hit testing
+                    activeCustomDrag.ghostEl.style.left = `${e.clientX + 15}px`;
+                    activeCustomDrag.ghostEl.style.top = `${e.clientY + 15}px`;
+                }
+
+                const under = document.elementFromPoint(e.clientX, e.clientY);
+                const targetLi = under?.closest("#playlist-list li");
+
+                document.querySelectorAll("#playlist-list li").forEach((li) => {
+                    if (li !== targetLi) li.classList.remove("drag-over");
+                });
+
+                if (targetLi) {
+                    targetLi.classList.add("drag-over");
+                }
             }
-
-            if (activeCustomDrag.ghostEl) {
-                // Offset by 15px to bottom-right to prevent the element from blocking standard hit testing
-                activeCustomDrag.ghostEl.style.left = `${e.clientX + 15}px`;
-                activeCustomDrag.ghostEl.style.top = `${e.clientY + 15}px`;
-            }
-
-            const under = document.elementFromPoint(e.clientX, e.clientY);
-            const targetLi = under?.closest("#playlist-list li");
-
-            document.querySelectorAll("#playlist-list li").forEach((li) => {
-                if (li !== targetLi) li.classList.remove("drag-over");
-            });
-
-            if (targetLi) {
-                targetLi.classList.add("drag-over");
-            }
-        }
-    }, true);
+        },
+        true,
+    );
 
     window.addEventListener("dragend", clearActiveDragGhost);
     window.addEventListener("drop", clearActiveDragGhost);
@@ -4116,7 +4311,8 @@ function makeSongDraggable(element, song) {
     element.setAttribute("draggable", "true");
     element.addEventListener("dragstart", (e) => {
         const img = new Image();
-        img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+        img.src =
+            "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
         e.dataTransfer.setDragImage(img, 0, 0);
 
         const selectionKey = getSongSelectionKey(song);
@@ -4514,7 +4710,8 @@ async function renderCollageArt(
     if (itemsWithImages.length >= 4) {
         const grid = document.createElement("div");
         const isSmall = size < 50;
-        grid.className = "playlist-collage-grid" + (isSmall ? " small-collage" : "");
+        grid.className =
+            "playlist-collage-grid" + (isSmall ? " small-collage" : "");
         grid.style.display = "grid";
         grid.style.gridTemplateColumns = "repeat(2, 1fr)";
         grid.style.gridTemplateRows = "repeat(2, 1fr)";
@@ -4599,7 +4796,8 @@ async function renderPlaylistArt(pl, artEl, size = 168) {
     if (pl.id === "pl_liked_songs") {
         artEl.innerHTML = "";
         artEl.style.position = "relative";
-        artEl.style.background = "linear-gradient(135deg, #15943f, var(--accent, #1db954))";
+        artEl.style.background =
+            "linear-gradient(135deg, #15943f, var(--accent, #1db954))";
         artEl.style.display = "flex";
         artEl.style.alignItems = "center";
         artEl.style.justifyContent = "center";
@@ -5055,7 +5253,7 @@ export function applyTheme(themeName, customCssCode) {
             customThemes = JSON.parse(
                 localStorage.getItem("app-custom-themes") || "[]",
             );
-        } catch (e) { }
+        } catch (e) {}
         const theme = customThemes.find((t) => t.id === themeId);
         if (theme) {
             generatedCss = theme.css + "\n";
@@ -5087,7 +5285,7 @@ export function refreshThemeOptions() {
         customThemes = JSON.parse(
             localStorage.getItem("app-custom-themes") || "[]",
         );
-    } catch (e) { }
+    } catch (e) {}
 
     customThemes.forEach((theme) => {
         const option = document.createElement("option");
@@ -5555,7 +5753,7 @@ function getRecentSearches() {
 function saveSearchQuery(query) {
     if (!query) return;
     let searches = getRecentSearches();
-    searches = searches.filter(q => q.toLowerCase() !== query.toLowerCase());
+    searches = searches.filter((q) => q.toLowerCase() !== query.toLowerCase());
     searches.unshift(query);
     if (searches.length > 10) {
         searches.pop();
@@ -5566,7 +5764,7 @@ function saveSearchQuery(query) {
 
 function deleteSearchQuery(query) {
     let searches = getRecentSearches();
-    searches = searches.filter(q => q.toLowerCase() !== query.toLowerCase());
+    searches = searches.filter((q) => q.toLowerCase() !== query.toLowerCase());
     localStorage.setItem(LOCAL_STORAGE_SEARCHES_KEY, JSON.stringify(searches));
     renderRecentSearches();
 }
@@ -5590,15 +5788,15 @@ function renderRecentSearches() {
     container.classList.remove("hidden");
     list.innerHTML = "";
 
-    searches.forEach(query => {
+    searches.forEach((query) => {
         const chip = document.createElement("div");
         chip.className = "recent-search-chip";
-        
+
         const textSpan = document.createElement("span");
         textSpan.className = "chip-text";
         textSpan.textContent = query;
         chip.appendChild(textSpan);
-        
+
         const delBtn = document.createElement("button");
         delBtn.type = "button";
         delBtn.className = "chip-delete-btn";
@@ -5608,21 +5806,23 @@ function renderRecentSearches() {
             deleteSearchQuery(query);
         });
         chip.appendChild(delBtn);
-        
+
         chip.addEventListener("click", () => {
             searchInput.value = query;
             const enterEvent = new KeyboardEvent("keydown", { key: "Enter" });
             searchInput.dispatchEvent(enterEvent);
         });
-        
+
         list.appendChild(chip);
     });
 }
 
 function setupSearch() {
-    document.getElementById("btn-clear-recent-searches")?.addEventListener("click", () => {
-        clearAllSearchQueries();
-    });
+    document
+        .getElementById("btn-clear-recent-searches")
+        ?.addEventListener("click", () => {
+            clearAllSearchQueries();
+        });
 
     renderRecentSearches();
 
@@ -5843,7 +6043,7 @@ async function renderAlbumGrid(albums, container) {
                 name: album.title,
                 fetchTracks: async () => {
                     const data = await cachedInvoke("spotify_search", {
-                        query: `album:${album.title}`,
+                        query: `album:${album.title} artist:${album.artist}`,
                     });
                     const res = JSON.parse(data);
                     if (res && res.type === "album" && res.tracks) {
@@ -6031,7 +6231,9 @@ async function selectSong(song, element) {
 async function populateQueueForArtistRadio(song) {
     if (!song || !song.artist) return;
     try {
-        console.log(`[Autoplay Radio] Populating queue for artist: "${song.artist}"`);
+        console.log(
+            `[Autoplay Radio] Populating queue for artist: "${song.artist}"`,
+        );
         const raw = await cachedInvoke("fetch_lastfm", {
             method: "artist.getTopTracks",
             extraParams: `&artist=${encodeURIComponent(song.artist)}&limit=25`,
@@ -6042,7 +6244,10 @@ async function populateQueueForArtistRadio(song) {
             if (Array.isArray(tracks) && tracks.length > 0) {
                 const artistTracks = tracks.map((t) => {
                     const images = parseImagesFromLastFm(t.image);
-                    const artistName = typeof t.artist === "object" ? t.artist.name : t.artist || "";
+                    const artistName =
+                        typeof t.artist === "object"
+                            ? t.artist.name
+                            : t.artist || "";
                     return {
                         title: t.name,
                         artist: artistName,
@@ -6052,38 +6257,54 @@ async function populateQueueForArtistRadio(song) {
                         spotify_url: null,
                     };
                 });
-                
+
                 const currentTitleLower = song.title.toLowerCase();
-                const filtered = artistTracks.filter(t => {
+                const filtered = artistTracks.filter((t) => {
                     const titleLower = (t.title || "").toLowerCase();
                     if (titleLower === currentTitleLower) return false;
-                    if (titleLower.includes(currentTitleLower) || currentTitleLower.includes(titleLower)) return false;
+                    if (
+                        titleLower.includes(currentTitleLower) ||
+                        currentTitleLower.includes(titleLower)
+                    )
+                        return false;
                     return true;
                 });
-                
+
                 const tracksToQueue = filtered.slice(0, 10);
                 if (tracksToQueue.length > 0) {
                     appQueue.push(...tracksToQueue);
                     renderQueueUI();
-                    console.log(`[Autoplay Radio] Appended ${tracksToQueue.length} tracks by "${song.artist}"`);
+                    console.log(
+                        `[Autoplay Radio] Appended ${tracksToQueue.length} tracks by "${song.artist}"`,
+                    );
                 }
             }
         }
     } catch (err) {
-        console.warn("[Autoplay Radio] Failed to fetch artist top tracks:", err);
+        console.warn(
+            "[Autoplay Radio] Failed to fetch artist top tracks:",
+            err,
+        );
     }
 }
 
-async function selectAndPlaySong(song, element, queueSongs = null, isSearchPlay = false) {
+async function selectAndPlaySong(
+    song,
+    element,
+    queueSongs = null,
+    isSearchPlay = false,
+) {
     await selectSong(song, element);
-    
-    const isSearchActive = isSearchPlay || (views.search && !views.search.classList.contains("hidden"));
-    
+
+    const isSearchActive =
+        isSearchPlay ||
+        (views.search && !views.search.classList.contains("hidden"));
+
     let list = resolvePlaybackQueueForSong(song, queueSongs);
     if (isSearchActive) {
         list = [song];
     }
-    
+
     if (list?.length) {
         setPlaybackQueue(list, song);
     } else if (!appQueue.length) {
@@ -6092,7 +6313,7 @@ async function selectAndPlaySong(song, element, queueSongs = null, isSearchPlay 
         syncQueueIndexForSong(song);
     }
     await playSong(song);
-    
+
     if (isSearchActive) {
         populateQueueForArtistRadio(song).catch(console.error);
     }
@@ -6124,7 +6345,7 @@ function getLyricsSkeletonHTML() {
 }
 
 function getTrackListSkeletonHTML(count = 5) {
-    let html = '';
+    let html = "";
     for (let i = 0; i < count; i++) {
         const titleWidth = 140 + (i % 3) * 30;
         const artistWidth = 80 + (i % 2) * 20;
@@ -6146,7 +6367,7 @@ function getTrackListSkeletonHTML(count = 5) {
 }
 
 function getAlbumGridSkeletonHTML(count = 4) {
-    let html = '';
+    let html = "";
     for (let i = 0; i < count; i++) {
         const titleWidth = 80 + (i % 3) * 15;
         const artistWidth = 50 + (i % 2) * 15;
@@ -6255,7 +6476,7 @@ function saveLastPlayedSession(song) {
         const cachePath =
             song.cache_path ||
             (currentStreamData?.file_path &&
-                !String(currentStreamData.file_path).startsWith("http")
+            !String(currentStreamData.file_path).startsWith("http")
                 ? currentStreamData.file_path
                 : null);
         const duration =
@@ -6301,9 +6522,9 @@ function addToRecentlyPlayed(song) {
             (item) =>
                 !(
                     String(item.title).toLowerCase() ===
-                    String(song.title).toLowerCase() &&
+                        String(song.title).toLowerCase() &&
                     String(item.artist).toLowerCase() ===
-                    String(song.artist).toLowerCase()
+                        String(song.artist).toLowerCase()
                 ),
         );
 
@@ -6348,8 +6569,6 @@ async function attachSeekableAudioForSong(song, playId) {
     const key = downloadTrackKey(song);
 
     if (playId != null && playId !== activePlayId) return null;
-
-    seedPlaybackFromCachePath(song);
 
     let entry = audioPrefetchByKey.get(key);
     try {
@@ -6532,9 +6751,9 @@ function updateRecentlyPlayedImage(song, newImageUrl) {
         list = list.map((item) => {
             if (
                 String(item.title).toLowerCase() ===
-                String(song.title).toLowerCase() &&
+                    String(song.title).toLowerCase() &&
                 String(item.artist).toLowerCase() ===
-                String(song.artist).toLowerCase()
+                    String(song.artist).toLowerCase()
             ) {
                 item.image = newImageUrl;
                 updated = true;
@@ -6664,6 +6883,17 @@ async function downloadSongWithMetadata(song) {
         }
         await ensureStorageReadyForDownload();
 
+        // Audio transfer and metadata/artwork lookup are independent. Start
+        // both together, then join them before the final tagged file is saved.
+        setSongDownloadActivity(song, "Downloading audio + metadata");
+        const audioResultPromise = invoke(
+            "stream_song",
+            streamSongInvokeArgs(song, true),
+        ).then(
+            (info) => ({ info, error: null }),
+            (error) => ({ info: null, error }),
+        );
+
         let meta = song.meta;
         if (!meta) {
             if (cancelledDownloads.has(key)) {
@@ -6676,6 +6906,21 @@ async function downloadSongWithMetadata(song) {
             song.meta = meta;
         }
 
+        if (meta) {
+            if (
+                song.track_number &&
+                (meta.track_number === undefined || meta.track_number === null)
+            ) {
+                meta.track_number = song.track_number;
+            }
+            if (
+                song.track_total &&
+                (meta.track_total === undefined || meta.track_total === null)
+            ) {
+                meta.track_total = song.track_total;
+            }
+        }
+
         if (cancelledDownloads.has(key)) {
             throw new Error("Cancelled");
         }
@@ -6685,8 +6930,10 @@ async function downloadSongWithMetadata(song) {
         if (cancelledDownloads.has(key)) {
             throw new Error("Cancelled");
         }
-        setSongDownloadActivity(song, "Downloading audio");
-        const streamInfo = await invoke("stream_song", streamSongInvokeArgs(song, true));
+        setSongDownloadActivity(song, "Finalizing audio");
+        const audioResult = await audioResultPromise;
+        if (audioResult.error) throw audioResult.error;
+        const streamInfo = audioResult.info;
 
         if (cancelledDownloads.has(key)) {
             throw new Error("Cancelled");
@@ -6732,7 +6979,7 @@ async function downloadSongWithMetadata(song) {
              <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">
                 Please verify the track details or check your internet connection and try again.
              </p>`,
-            () => { },
+            () => {},
             "Close",
             false,
         );
@@ -6858,7 +7105,7 @@ function setupContextMenu() {
             }
         });
     document
-        .getElementById("cm-download")
+        .getElementById("cm-download-local")
         .addEventListener("click", async () => {
             const songs = getUniqueSelectedSongs();
             if (!songs.length) return;
@@ -6866,17 +7113,38 @@ function setupContextMenu() {
                 await downloadSongWithMetadata(songs[0]);
                 return;
             }
-            await downloadSongsWithConcurrency(songs, 2);
+            await downloadSongsWithConcurrency(songs, 2, false);
         });
     document
-        .getElementById("cm-download-group")
+        .getElementById("cm-download-iphone")
+        .addEventListener("click", async () => {
+            const songs = getUniqueSelectedSongs();
+            if (!songs.length) return;
+            await downloadSongsWithConcurrency(songs, 2, true);
+        });
+    document
+        .getElementById("cm-download-group-local")
         .addEventListener("click", async () => {
             if (selectedGroup) {
                 statusBar.textContent = `Fetching tracks for ${selectedGroup.name}...`;
                 try {
                     const tracks = await selectedGroup.fetchTracks();
-                    await downloadSongsWithConcurrency(tracks, 2);
+                    await downloadSongsWithConcurrency(tracks, 2, false);
                     statusBar.textContent = `Downloaded ${tracks.length} tracks from ${selectedGroup.name}`;
+                } catch (e) {
+                    statusBar.textContent = `Error fetching group tracks: ${e}`;
+                }
+            }
+        });
+    document
+        .getElementById("cm-download-group-iphone")
+        .addEventListener("click", async () => {
+            if (selectedGroup) {
+                statusBar.textContent = `Fetching tracks for ${selectedGroup.name} for iPhone...`;
+                try {
+                    const tracks = await selectedGroup.fetchTracks();
+                    await downloadSongsWithConcurrency(tracks, 2, true);
+                    statusBar.textContent = `Synced ${tracks.length} tracks from ${selectedGroup.name} to iPhone`;
                 } catch (e) {
                     statusBar.textContent = `Error fetching group tracks: ${e}`;
                 }
@@ -6887,11 +7155,17 @@ function setupContextMenu() {
             openArtistPage(selectedSong.artist);
         }
     });
-    document.getElementById("cm-rename-playlist")?.addEventListener("click", () => {
-        if (selectedGroup && selectedGroup.type === "playlist" && selectedGroup.id) {
-            triggerRenamePlaylistFlow(selectedGroup.id);
-        }
-    });
+    document
+        .getElementById("cm-rename-playlist")
+        ?.addEventListener("click", () => {
+            if (
+                selectedGroup &&
+                selectedGroup.type === "playlist" &&
+                selectedGroup.id
+            ) {
+                triggerRenamePlaylistFlow(selectedGroup.id);
+            }
+        });
 }
 
 function formatTime(seconds) {
@@ -6901,14 +7175,22 @@ function formatTime(seconds) {
     return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-async function setNowPlaying(song) {
+async function setNowPlaying(song, playId = null) {
     document.getElementById("np-title").textContent = song.title;
     const npArtistEl = document.getElementById("np-artist");
     npArtistEl.replaceChildren(artistLinkEl(song.artist));
     npArt.innerHTML = "";
+    npArt.appendChild(generateThumbnail(song.title, song.artist, 50));
+    updateNowPlayingDownloadBadge(song);
+    updateLikeButton();
+
     await resolveTrackCoverUrl(song);
+    if (playId != null && playId !== activePlayId) return;
+
+    npArt.innerHTML = "";
     if (isValidImage(song.image)) {
         const cached = await resolveArtUrl(song.image);
+        if (playId != null && playId !== activePlayId) return;
         if (cached) {
             const img = document.createElement("img");
             img.src = cached;
@@ -6928,6 +7210,15 @@ async function playSong(song) {
     currentSong = song;
     syncQueueIndexForSong(song);
     const playId = ++activePlayId;
+    // Queued cache jobs are speculative; a direct user selection always wins.
+    backgroundCacheQueue.clear();
+    if (neighborPrefetchTimer) {
+        clearTimeout(neighborPrefetchTimer);
+        neighborPrefetchTimer = null;
+    }
+    void setNowPlaying(song, playId).catch((err) =>
+        console.warn("Now-playing artwork failed:", err),
+    );
     const hasLocalReady = hasPrefetchedAudio(song) || isSongDownloaded(song);
     if (!hasLocalReady) {
         setBuffering(true);
@@ -6976,13 +7267,8 @@ async function playSong(song) {
 
         await audioPlayer.play();
 
-        if (streamInfo.live === true) {
-            startBackgroundCache(song);
-        }
-
         if (playId !== activePlayId) return;
 
-        await setNowPlaying(song);
         updateNowPlayingDownloadBadge(song);
         saveLastPlayedSession(song);
         addToRecentlyPlayed(song);
@@ -6999,7 +7285,7 @@ async function playSong(song) {
         updatePlayingIndicators();
         updateScreensaverUI();
 
-        prefetchQueueNeighbors();
+        scheduleQueuePrefetch();
 
         // Background prefetch autoplay similar song if we are at the end of the queue
         if (loopMode !== "one") {
@@ -7218,17 +7504,38 @@ async function openPlaylistView(playlistId) {
         } else {
             headerArtEl.classList.remove("liked-songs-art");
             headerArtEl.onclick = () => {
-                const fileInput = document.getElementById("playlist-art-file-input");
+                const fileInput = document.getElementById(
+                    "playlist-art-file-input",
+                );
                 if (fileInput) {
                     fileInput.value = "";
                     fileInput.onchange = (event) => {
                         const file = event.target.files[0];
                         if (!file) return;
 
-                        const validMimeTypes = ["image/jpeg", "image/png", "image/webp", "image/gif", "image/svg+xml"];
-                        const validExtensions = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg"];
-                        const extension = file.name.includes(".") ? file.name.substring(file.name.lastIndexOf(".")).toLowerCase() : "";
-                        const isValidType = validMimeTypes.includes(file.type) || validExtensions.includes(extension);
+                        const validMimeTypes = [
+                            "image/jpeg",
+                            "image/png",
+                            "image/webp",
+                            "image/gif",
+                            "image/svg+xml",
+                        ];
+                        const validExtensions = [
+                            ".jpg",
+                            ".jpeg",
+                            ".png",
+                            ".webp",
+                            ".gif",
+                            ".svg",
+                        ];
+                        const extension = file.name.includes(".")
+                            ? file.name
+                                  .substring(file.name.lastIndexOf("."))
+                                  .toLowerCase()
+                            : "";
+                        const isValidType =
+                            validMimeTypes.includes(file.type) ||
+                            validExtensions.includes(extension);
 
                         if (!isValidType) {
                             showModal(
@@ -7244,7 +7551,7 @@ async function openPlaylistView(playlistId) {
                                  </ul>`,
                                 null,
                                 "OK",
-                                false
+                                false,
                             );
                             return;
                         }
@@ -7259,10 +7566,14 @@ async function openPlaylistView(playlistId) {
                                 let height = img.height;
                                 if (width > maxDim || height > maxDim) {
                                     if (width > height) {
-                                        height = Math.round((height * maxDim) / width);
+                                        height = Math.round(
+                                            (height * maxDim) / width,
+                                        );
                                         width = maxDim;
                                     } else {
-                                        width = Math.round((width * maxDim) / height);
+                                        width = Math.round(
+                                            (width * maxDim) / height,
+                                        );
                                         height = maxDim;
                                     }
                                 }
@@ -7271,7 +7582,10 @@ async function openPlaylistView(playlistId) {
                                 const ctx = canvas.getContext("2d");
                                 ctx.drawImage(img, 0, 0, width, height);
 
-                                const base64Data = canvas.toDataURL("image/jpeg", 0.85);
+                                const base64Data = canvas.toDataURL(
+                                    "image/jpeg",
+                                    0.85,
+                                );
                                 pl.custom_image = base64Data;
                                 persistPlaylists().then(() => {
                                     openPlaylistView(playlistId);
@@ -7400,7 +7714,8 @@ async function openPlaylistView(playlistId) {
         tr.addEventListener("dragstart", (e) => {
             e.dataTransfer.effectAllowed = "copyMove";
             const img = new Image();
-            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            img.src =
+                "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
             e.dataTransfer.setDragImage(img, 0, 0);
 
             const isDraggedSelected = isSelectionKeySelected(selectionKey);
@@ -7792,7 +8107,7 @@ async function pickAndApplyStorageDir(kind) {
         showModal(
             "Invalid folder",
             `<p>${escapeHtml(String(err))}</p>`,
-            () => { },
+            () => {},
             "Close",
             false,
         );
@@ -7915,6 +8230,73 @@ document.getElementById("btn-clear-cache")?.addEventListener("click", () => {
     );
 });
 
+document.getElementById("btn-fix-metadata")?.addEventListener("click", () => {
+    showModal(
+        "Fix Track Metadata",
+        `<p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500;">Do you want to fix metadata tags for all downloaded tracks?</p>
+             <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">This will scan your downloads, strip suffix variants (e.g. Deluxe, Spotify, Explicit) from album tags, map singles to their official parent albums where possible, and rewrite ID3 tags directly in the files. This might take a few moments.</p>`,
+        async () => {
+            const confirmBtn = document.getElementById("modal-confirm-btn");
+            const cancelBtn = document.getElementById("modal-cancel-btn");
+            if (confirmBtn) confirmBtn.style.display = "none";
+            if (cancelBtn) cancelBtn.style.display = "none";
+
+            const bodyEl = document.getElementById("modal-body");
+            bodyEl.innerHTML = `
+                    <p style="margin-bottom: 12px; font-weight: 500;">Fixing metadata tags...</p>
+                    <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; margin-bottom: 8px;">
+                        <div id="fix-metadata-progress-bar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.2s ease;"></div>
+                    </div>
+                    <p id="fix-metadata-progress-text" style="font-size: 0.85rem; color: var(--fg-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Starting...</p>
+                `;
+
+            setBuffering(true);
+            statusBar.textContent = "Fixing metadata tags for all tracks...";
+            let unlisten;
+            try {
+                unlisten = await window.__TAURI__.event.listen(
+                    "fix-metadata-progress",
+                    (event) => {
+                        const payload = event.payload;
+                        const bar = document.getElementById(
+                            "fix-metadata-progress-bar",
+                        );
+                        const txt = document.getElementById(
+                            "fix-metadata-progress-text",
+                        );
+                        if (bar) bar.style.width = `${payload.percent}%`;
+                        if (txt)
+                            txt.textContent = `[${payload.current}/${payload.total}] ${payload.filename}`;
+                    },
+                );
+
+                const result = await invoke("fix_downloads_metadata");
+                await initDownloadsView();
+                statusBar.textContent = "Metadata fix complete!";
+                bodyEl.innerHTML = `
+                        <p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500; color: var(--accent);">Metadata Fix Complete!</p>
+                        <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">${escapeHtml(result)}</p>
+                    `;
+            } catch (err) {
+                statusBar.textContent = `Fix metadata failed: ${err}`;
+                bodyEl.innerHTML = `
+                        <p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500; color: var(--err, #ff5555);">Fix Metadata Failed</p>
+                        <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">${escapeHtml(String(err))}</p>
+                    `;
+            } finally {
+                if (unlisten) unlisten();
+                setBuffering(false);
+                if (confirmBtn) {
+                    confirmBtn.textContent = "Close";
+                    confirmBtn.style.display = "";
+                }
+            }
+            return false;
+        },
+        "Fix Metadata",
+    );
+});
+
 document
     .getElementById("btn-delete-all-downloads")
     ?.addEventListener("click", () => {
@@ -7940,7 +8322,7 @@ document
                     showModal(
                         "Error",
                         `<p>Could not delete downloads: ${escapeHtml(err)}</p>`,
-                        () => { },
+                        () => {},
                         "Close",
                         false,
                     );
@@ -8062,6 +8444,74 @@ async function renderDownloadsList(searchQuery = "") {
 
             const actTd = document.createElement("td");
             actTd.className = "col-actions";
+
+            const syncBtn = document.createElement("button");
+            syncBtn.type = "button";
+            syncBtn.className = "downloads-sync-btn";
+            syncBtn.style.padding = "6px 12px";
+            syncBtn.style.fontSize = "0.75rem";
+            syncBtn.style.marginRight = "8px";
+            syncBtn.style.borderRadius = "4px";
+            syncBtn.style.cursor = "pointer";
+            syncBtn.style.fontFamily = "monospace";
+            syncBtn.style.transition = "all 0.2s";
+            syncBtn.style.background = "rgba(255, 255, 255, 0.06)";
+            syncBtn.style.color = "var(--fg)";
+            syncBtn.style.border = "1px solid rgba(255, 255, 255, 0.1)";
+
+            const isAlreadySynced = vlcFileNames && vlcFileNames.has(filename);
+            if (isAlreadySynced) {
+                syncBtn.textContent = "✓ Synced";
+                syncBtn.style.background = "rgba(29, 185, 84, 0.12)";
+                syncBtn.style.color = "#1db954";
+                syncBtn.style.borderColor = "rgba(29, 185, 84, 0.3)";
+                syncBtn.style.cursor = "default";
+            } else {
+                syncBtn.textContent = "iOS Sync";
+                syncBtn.addEventListener("click", async (ev) => {
+                    ev.stopPropagation();
+                    if (!vlcConnectedIp) {
+                        alert(
+                            "Please connect to your iOS device first using the 'Connect VLC' dropdown at the top of the app.",
+                        );
+                        return;
+                    }
+                    syncBtn.textContent = "Syncing...";
+                    syncBtn.disabled = true;
+                    try {
+                        await invoke("vlc_upload_downloaded_file", {
+                            ip: vlcConnectedIp,
+                            filename: filename,
+                        });
+                        syncBtn.textContent = "✓ Synced";
+                        syncBtn.style.background = "rgba(29, 185, 84, 0.12)";
+                        syncBtn.style.color = "#1db954";
+                        syncBtn.style.borderColor = "rgba(29, 185, 84, 0.3)";
+                        syncBtn.style.cursor = "default";
+                        vlcFileNames.add(filename);
+                        vlcTracks.push({
+                            filename: filename,
+                            title: filename,
+                            artist: "Unknown Artist",
+                            ext: filename
+                                .substring(filename.lastIndexOf(".") + 1)
+                                .toUpperCase(),
+                            thumbnail_url: null,
+                            second_line: "Synced",
+                            artwork_missing: true,
+                            artist_missing: true,
+                            album: "Unknown Album",
+                            album_missing: true,
+                        });
+                    } catch (err) {
+                        alert("Sync failed: " + err);
+                        syncBtn.textContent = "iOS Sync";
+                        syncBtn.disabled = false;
+                    }
+                });
+            }
+            actTd.appendChild(syncBtn);
+
             const delBtn = document.createElement("button");
             delBtn.type = "button";
             delBtn.className = "downloads-remove-btn";
@@ -8086,7 +8536,7 @@ async function renderDownloadsList(searchQuery = "") {
                             showModal(
                                 "Error Deleting File",
                                 `<p>Failed to delete: ${escapeHtml(String(err))}</p>`,
-                                () => { },
+                                () => {},
                                 "Close",
                                 false,
                             );
@@ -8170,7 +8620,8 @@ setTimeout(() => {
     const btnImportSelected = document.getElementById("btn-import-selected");
 
     async function compressRemoteImage(url) {
-        if (!url || url.includes("default.png") || url.includes("noimage")) return null;
+        if (!url || url.includes("default.png") || url.includes("noimage"))
+            return null;
         try {
             const res = await fetch(url);
             const blob = await res.blob();
@@ -8503,11 +8954,15 @@ function updateScreensaverLiquidColors(artUrl) {
                 const g = data[sampleIndex * 4 + 1];
                 const b = data[sampleIndex * 4 + 2];
                 if (blobs[idx]) {
-                    blobs[idx].style.backgroundColor = `rgba(${r}, ${g}, ${b}, ${0.38 + idx * 0.04})`;
+                    blobs[idx].style.backgroundColor =
+                        `rgba(${r}, ${g}, ${b}, ${0.38 + idx * 0.04})`;
                 }
             });
         } catch (e) {
-            console.warn("CORS or canvas error extracting album art colors:", e);
+            console.warn(
+                "CORS or canvas error extracting album art colors:",
+                e,
+            );
             if (currentSong) {
                 const colors = [
                     hashColor(currentSong.title + currentSong.artist),
@@ -8638,7 +9093,10 @@ async function updateScreensaverUI() {
     const rightPanel = ssOverlay.querySelector(".screensaver-right");
     if (lyricsPanel && rightPanel) {
         const isPureLyrics = ssOverlay.classList.contains("pure-lyrics-mode");
-        rightPanel.classList.toggle("lyrics-active", ssLyricsVisible && !isPureLyrics);
+        rightPanel.classList.toggle(
+            "lyrics-active",
+            ssLyricsVisible && !isPureLyrics,
+        );
         if (ssLyricsVisible || isPureLyrics) {
             lyricsPanel.classList.remove("hidden");
             renderLyricsPanel("fullscreen-lyrics");
@@ -8649,7 +9107,10 @@ async function updateScreensaverUI() {
 
     const ssLyricsToggle = document.getElementById("ss-btn-lyrics-toggle");
     if (ssLyricsToggle) {
-        ssLyricsToggle.classList.toggle("active", ssLyricsVisible || ssOverlay.classList.contains("pure-lyrics-mode"));
+        ssLyricsToggle.classList.toggle(
+            "active",
+            ssLyricsVisible || ssOverlay.classList.contains("pure-lyrics-mode"),
+        );
     }
 }
 
@@ -8866,7 +9327,10 @@ function getInstalledPluginsFromStorage() {
         const data = localStorage.getItem(LOCAL_STORAGE_PLUGINS_KEY);
         return data ? JSON.parse(data) : [];
     } catch (e) {
-        console.error("Failed to parse installed plugins from localStorage:", e);
+        console.error(
+            "Failed to parse installed plugins from localStorage:",
+            e,
+        );
         return [];
     }
 }
@@ -8874,7 +9338,7 @@ function getInstalledPluginsFromStorage() {
 function savePluginToStorage(pluginMeta) {
     if (!pluginMeta || !pluginMeta.id || !pluginMeta.url) return;
     const plugins = getInstalledPluginsFromStorage();
-    if (!plugins.some(p => p.id === pluginMeta.id)) {
+    if (!plugins.some((p) => p.id === pluginMeta.id)) {
         plugins.push({
             id: pluginMeta.id,
             name: pluginMeta.name,
@@ -8882,19 +9346,26 @@ function savePluginToStorage(pluginMeta) {
             icon: pluginMeta.icon,
             description: pluginMeta.description,
             lastUpdated: pluginMeta.lastUpdated,
-            downloads: pluginMeta.downloads
+            downloads: pluginMeta.downloads,
         });
-        localStorage.setItem(LOCAL_STORAGE_PLUGINS_KEY, JSON.stringify(plugins));
+        localStorage.setItem(
+            LOCAL_STORAGE_PLUGINS_KEY,
+            JSON.stringify(plugins),
+        );
     }
 }
 
 function removePluginFromStorage(pluginId) {
     let plugins = getInstalledPluginsFromStorage();
-    plugins = plugins.filter(p => p.id !== pluginId);
+    plugins = plugins.filter((p) => p.id !== pluginId);
     localStorage.setItem(LOCAL_STORAGE_PLUGINS_KEY, JSON.stringify(plugins));
 }
 
-async function loadPluginScript(pluginMeta, onComplete = null, onFailure = null) {
+async function loadPluginScript(
+    pluginMeta,
+    onComplete = null,
+    onFailure = null,
+) {
     try {
         const scriptRes = await fetch(pluginMeta.url);
         if (!scriptRes.ok) {
@@ -8917,7 +9388,12 @@ async function loadPluginScript(pluginMeta, onComplete = null, onFailure = null)
         script.onerror = (err) => {
             URL.revokeObjectURL(url);
             console.error("Plugin loading error:", err);
-            if (onFailure) onFailure(new Error("The script contains syntax errors. See devtools."));
+            if (onFailure)
+                onFailure(
+                    new Error(
+                        "The script contains syntax errors. See devtools.",
+                    ),
+                );
         };
 
         document.body.appendChild(script);
@@ -8933,7 +9409,10 @@ async function loadInstalledPluginsFromStorage() {
         try {
             await loadPluginScript(p);
         } catch (err) {
-            console.error(`Failed to load persisted plugin ${p.id} on startup:`, err);
+            console.error(
+                `Failed to load persisted plugin ${p.id} on startup:`,
+                err,
+            );
         }
     }
 }
@@ -9135,12 +9614,20 @@ window.spotiTauri = {
                     removePluginFromStorage(meta.id);
 
                     // INSTANTLY RESTORE TO MARKETPLACE
-                    const pluginMeta = cachedMarketplaceRegistry.find(p => p.id === meta.id);
+                    const pluginMeta = cachedMarketplaceRegistry.find(
+                        (p) => p.id === meta.id,
+                    );
                     if (pluginMeta) {
-                        const pluginsGrid = document.getElementById("plugins-grid");
+                        const pluginsGrid =
+                            document.getElementById("plugins-grid");
                         if (pluginsGrid) {
-                            if (!document.querySelector(`#plugins-grid .plugin-card[data-plugin-id="${meta.id}"]`)) {
-                                const marketCard = createMarketplaceCard(pluginMeta);
+                            if (
+                                !document.querySelector(
+                                    `#plugins-grid .plugin-card[data-plugin-id="${meta.id}"]`,
+                                )
+                            ) {
+                                const marketCard =
+                                    createMarketplaceCard(pluginMeta);
                                 pluginsGrid.appendChild(marketCard);
                             }
                         }
@@ -9182,7 +9669,8 @@ function createMarketplaceCard(pluginMeta) {
     const description = pluginMeta.description || "No description provided.";
     const lastUpdated = pluginMeta.lastUpdated || "N/A";
     const downloads = pluginMeta.downloads != null ? pluginMeta.downloads : 0;
-    const downloadsStr = downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
+    const downloadsStr =
+        downloads >= 1000 ? `${(downloads / 1000).toFixed(1)}k` : downloads;
 
     let iconHtml = "";
     if (!pluginMeta.icon || pluginMeta.icon === "🔌") {
@@ -9220,13 +9708,17 @@ function createMarketplaceCard(pluginMeta) {
         installBtn.textContent = "Installing...";
         installBtn.disabled = true;
 
-        await loadPluginScript(pluginMeta, () => {
-            savePluginToStorage(pluginMeta);
-        }, (err) => {
-            alert(`Installation failed: ${err.message}`);
-            installBtn.textContent = "Install";
-            installBtn.disabled = false;
-        });
+        await loadPluginScript(
+            pluginMeta,
+            () => {
+                savePluginToStorage(pluginMeta);
+            },
+            (err) => {
+                alert(`Installation failed: ${err.message}`);
+                installBtn.textContent = "Install";
+                installBtn.disabled = false;
+            },
+        );
     });
 
     return card;
@@ -9299,15 +9791,14 @@ function handleGlobalKeyDown(e) {
         const type = active.type ? active.type.toLowerCase() : "";
         if (
             tagName === "textarea" ||
-            (tagName === "input" && (
-                type === "text" ||
-                type === "search" ||
-                type === "number" ||
-                type === "email" ||
-                type === "password" ||
-                type === "url" ||
-                type === "tel"
-            )) ||
+            (tagName === "input" &&
+                (type === "text" ||
+                    type === "search" ||
+                    type === "number" ||
+                    type === "email" ||
+                    type === "password" ||
+                    type === "url" ||
+                    type === "tel")) ||
             active.isContentEditable
         ) {
             return;
@@ -9344,7 +9835,10 @@ function handleGlobalKeyDown(e) {
         case "ArrowLeft":
             e.preventDefault();
             if (audioPlayer && Number.isFinite(audioPlayer.duration)) {
-                audioPlayer.currentTime = Math.max(0, audioPlayer.currentTime - 10);
+                audioPlayer.currentTime = Math.max(
+                    0,
+                    audioPlayer.currentTime - 10,
+                );
                 syncProgressFromPlayer();
                 syncLyricsPlayback(audioPlayer.currentTime);
             }
@@ -9353,7 +9847,10 @@ function handleGlobalKeyDown(e) {
         case "ArrowRight":
             e.preventDefault();
             if (audioPlayer && Number.isFinite(audioPlayer.duration)) {
-                audioPlayer.currentTime = Math.min(audioPlayer.duration, audioPlayer.currentTime + 10);
+                audioPlayer.currentTime = Math.min(
+                    audioPlayer.duration,
+                    audioPlayer.currentTime + 10,
+                );
                 syncProgressFromPlayer();
                 syncLyricsPlayback(audioPlayer.currentTime);
             }
@@ -9386,4 +9883,2144 @@ function handleGlobalKeyDown(e) {
             }
             break;
     }
+}
+
+// --- VLC iOS Sync Bridge ---
+async function checkVlcConnection() {
+    const statusDot = document.getElementById("vlc-status-dot");
+    const statusMsg = document.getElementById("vlc-status-message");
+    const iphoneSep = document.getElementById("nav-iphone-sep");
+    const iphoneNav = document.getElementById("nav-iphone");
+
+    if (!vlcConnectedIp) {
+        if (statusDot) {
+            statusDot.style.background = "#777";
+            statusDot.style.boxShadow = "0 0 8px rgba(119, 119, 119, 0.5)";
+            statusDot.className = "";
+            statusDot.title = "Connect VLC to start syncing";
+        }
+        if (statusMsg) {
+            statusMsg.style.display = "none";
+        }
+        vlcTracks = [];
+        vlcFileNames = new Set();
+        if (iphoneSep) iphoneSep.style.display = "none";
+        if (iphoneNav) iphoneNav.style.display = "none";
+        const viewIphone = document.getElementById("view-iphone");
+        if (viewIphone && !viewIphone.classList.contains("hidden")) {
+            if (window.switchView) window.switchView("home");
+        }
+        return;
+    }
+
+    if (statusDot) {
+        statusDot.style.background = "#ffb000";
+        statusDot.style.boxShadow = "0 0 10px #ffb000";
+        statusDot.className = "vlc-dot-connecting";
+        statusDot.title = `Connecting to VLC (${vlcConnectedIp})...`;
+    }
+    if (statusMsg) {
+        statusMsg.style.display = "block";
+        statusMsg.style.color = "var(--fg-muted)";
+        statusMsg.textContent = "Connecting to device...";
+        statusMsg.title = `Attempting to reach http://${vlcConnectedIp}`;
+    }
+
+    try {
+        const res = await invoke("vlc_list_files", { ip: vlcConnectedIp });
+        vlcTracks = res.files;
+        vlcFileNames = new Set(res.files.map((t) => t.filename));
+
+        if (res.resolved_ip && res.resolved_ip !== vlcConnectedIp) {
+            console.log(`VLC Connection resolved IP to: ${res.resolved_ip}`);
+            vlcConnectedIp = res.resolved_ip;
+            localStorage.setItem("vlc_connected_ip", res.resolved_ip);
+
+            const select = document.getElementById("vlc-device-select");
+            if (select) {
+                let exists = false;
+                for (let i = 0; i < select.options.length; i++) {
+                    if (select.options[i].value === res.resolved_ip) {
+                        select.selectedIndex = i;
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    const opt = document.createElement("option");
+                    opt.value = res.resolved_ip;
+                    opt.textContent = res.resolved_ip;
+                    opt.style.background = "var(--bg-card)";
+                    opt.style.color = "var(--fg)";
+                    select.insertBefore(
+                        opt,
+                        select.querySelector('option[value="custom"]'),
+                    );
+                    select.value = res.resolved_ip;
+                }
+            }
+        }
+
+        if (statusDot) {
+            statusDot.style.background = "#1db954";
+            statusDot.style.boxShadow = "0 0 10px #1db954";
+            statusDot.className = "";
+            statusDot.title = `Connected to VLC (${vlcConnectedIp}) - ${res.files.length} tracks detected`;
+        }
+        if (statusMsg) {
+            statusMsg.style.display = "block";
+            statusMsg.style.color = "#1db954";
+            statusMsg.textContent = `Connected · ${res.files.length} iOS tracks`;
+            statusMsg.title = `Successfully synced with VLC at ${vlcConnectedIp}`;
+            statusMsg.onclick = null;
+        }
+
+        wasVlcConnected = true;
+
+        if (iphoneSep) iphoneSep.style.display = "block";
+        if (iphoneNav) iphoneNav.style.display = "flex";
+
+        const viewIphone = document.getElementById("view-iphone");
+        if (viewIphone && !viewIphone.classList.contains("hidden")) {
+            renderIphoneView();
+        }
+
+        const viewDls = document.getElementById("view-downloads");
+        if (viewDls && !viewDls.classList.contains("hidden")) {
+            await renderDownloadsList(downloadsSearchQuery);
+        }
+    } catch (err) {
+        vlcTracks = [];
+        vlcFileNames = new Set();
+        const errMsg = String(err);
+
+        if (wasVlcConnected) {
+            wasVlcConnected = false;
+            showModal(
+                "Device Connection Lost",
+                `<p style="margin-bottom: 0.8rem; font-weight: bold; color: #ff5e57;">VLC at ${escapeHtml(vlcConnectedIp)} could not be reached.</p>
+                 <p style="margin-bottom: 0.8rem; line-height: 1.45; font-size: 0.88rem;">Is your device turned on? You may have disconnected, closed the VLC app, or toggled off "Sharing via Wi-Fi".</p>
+                 <p style="margin-bottom: 0; line-height: 1.45; font-size: 0.88rem; color: var(--fg-muted);"><strong>Tip:</strong> To prevent the connection from dropping during large transfers, consider disabling Auto-Lock in your iOS settings (<strong>Settings &gt; Display &amp; Brightness &gt; Auto-Lock &gt; Never</strong>) to keep the screen on.</p>`,
+                () => {},
+                "Dismiss",
+                false,
+            );
+        }
+
+        if (statusDot) {
+            statusDot.style.background = "#e91429";
+            statusDot.style.boxShadow = "0 0 10px #e91429";
+            statusDot.className = "";
+            statusDot.title = `Offline: ${errMsg}`;
+        }
+        if (statusMsg) {
+            statusMsg.style.display = "block";
+            statusMsg.style.color = "#ff5e57";
+            statusMsg.textContent = "Connection offline";
+            statusMsg.title = `Offline details: ${errMsg} (Click to read details)`;
+            statusMsg.onclick = () => {
+                showModal(
+                    "VLC Connection Offline",
+                    `<p style="margin-bottom: 0.8rem; font-weight: bold; color: #ff5e57;">VLC at ${escapeHtml(vlcConnectedIp)} could not be reached.</p>
+                     <div style="background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); padding: 12px; border-radius: 6px; font-family: monospace; font-size: 0.85rem; line-height: 1.45; white-space: pre-wrap; word-break: break-all; margin-bottom: 12px;">${escapeHtml(errMsg)}</div>
+                     <p style="margin-bottom: 0; font-size: 0.88rem; color: var(--fg-muted); line-height: 1.4;">Make sure VLC is actively running in the foreground on your iOS device, "Sharing via Wi-Fi" is toggled ON, and both devices are connected to the exact same Wi-Fi subnet.</p>`,
+                    () => {},
+                );
+            };
+        }
+
+        if (iphoneSep) iphoneSep.style.display = "none";
+        if (iphoneNav) iphoneNav.style.display = "none";
+        const viewIphone = document.getElementById("view-iphone");
+        if (viewIphone && !viewIphone.classList.contains("hidden")) {
+            if (window.switchView) window.switchView("home");
+        }
+    }
+}
+
+function setupVlcSync() {
+    const select = document.getElementById("vlc-device-select");
+    const refreshBtn = document.getElementById("btn-vlc-refresh");
+    const helpBtn = document.getElementById("btn-vlc-help");
+    const modal = document.getElementById("vlc-help-modal");
+    const closeBtn = document.getElementById("vlc-help-close-btn");
+    const okBtn = document.getElementById("vlc-help-ok-btn");
+    const statusDot = document.getElementById("vlc-status-dot");
+    const statusMsg = document.getElementById("vlc-status-message");
+
+    if (!select) return;
+
+    if (vlcConnectedIp) {
+        const opt = document.createElement("option");
+        opt.value = vlcConnectedIp;
+        opt.textContent = vlcConnectedIp;
+        opt.selected = true;
+        opt.style.background = "var(--bg-card)";
+        opt.style.color = "var(--fg)";
+        select.insertBefore(
+            opt,
+            select.querySelector('option[value="custom"]'),
+        );
+        checkVlcConnection();
+    }
+
+    setInterval(() => {
+        if (vlcConnectedIp) {
+            checkVlcConnection().catch(() => {});
+        }
+    }, 20000);
+
+    select.addEventListener("change", async (e) => {
+        const val = e.target.value;
+        if (val === "custom") {
+            const ip = await window.prompt(
+                "Enter your iOS Device IP address (e.g. 192.168.1.100):",
+                "192.168.1.100",
+            );
+            if (ip && ip.trim()) {
+                const cleanIp = ip
+                    .trim()
+                    .replace(/^https?:\/\//, "")
+                    .replace(/\/$/, "");
+                vlcConnectedIp = cleanIp;
+                localStorage.setItem("vlc_connected_ip", cleanIp);
+
+                let exists = false;
+                for (let i = 0; i < select.options.length; i++) {
+                    if (select.options[i].value === cleanIp) {
+                        select.selectedIndex = i;
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    const opt = document.createElement("option");
+                    opt.value = cleanIp;
+                    opt.textContent = cleanIp;
+                    opt.selected = true;
+                    opt.style.background = "var(--bg-card)";
+                    opt.style.color = "var(--fg)";
+                    select.insertBefore(
+                        opt,
+                        select.querySelector('option[value="custom"]'),
+                    );
+                }
+                checkVlcConnection();
+            } else {
+                select.value = vlcConnectedIp;
+            }
+        } else {
+            vlcConnectedIp = val;
+            if (val) {
+                localStorage.setItem("vlc_connected_ip", val);
+            } else {
+                localStorage.removeItem("vlc_connected_ip");
+            }
+            checkVlcConnection();
+        }
+    });
+
+    refreshBtn.addEventListener("click", async () => {
+        if (refreshBtn.classList.contains("vlc-rotate-spin")) return;
+
+        refreshBtn.classList.add("vlc-rotate-spin");
+        select.disabled = true;
+
+        if (statusDot) {
+            statusDot.style.background = "#ffb000";
+            statusDot.style.boxShadow = "0 0 10px #ffb000";
+            statusDot.className = "vlc-dot-connecting";
+            statusDot.title = "Scanning local network for VLC devices...";
+        }
+        if (statusMsg) {
+            statusMsg.style.display = "block";
+            statusMsg.style.color = "var(--fg-muted)";
+            statusMsg.textContent = "Scanning network...";
+            statusMsg.title =
+                "Pinging all local subnet IP addresses concurrently on ports 80 & 8080...";
+            statusMsg.onclick = null;
+        }
+
+        try {
+            const devices = await invoke("vlc_scan_devices");
+
+            const currentSelectedVal = vlcConnectedIp;
+            select.innerHTML = `
+                <option value="" style="background: var(--bg-card); color: var(--fg);">Connect VLC...</option>
+                <option value="custom" style="background: var(--bg-card); color: var(--fg);">+ Custom IP</option>
+            `;
+
+            devices.forEach((dev) => {
+                const opt = document.createElement("option");
+                opt.value = dev;
+                opt.textContent = dev;
+                opt.style.background = "var(--bg-card)";
+                opt.style.color = "var(--fg)";
+                select.insertBefore(
+                    opt,
+                    select.querySelector('option[value="custom"]'),
+                );
+            });
+
+            if (
+                currentSelectedVal &&
+                (devices.includes(currentSelectedVal) ||
+                    devices.some(
+                        (d) =>
+                            d.split(":")[0] ===
+                            currentSelectedVal.split(":")[0],
+                    ))
+            ) {
+                const match =
+                    devices.find(
+                        (d) =>
+                            d.split(":")[0] ===
+                            currentSelectedVal.split(":")[0],
+                    ) || currentSelectedVal;
+                vlcConnectedIp = match;
+                localStorage.setItem("vlc_connected_ip", match);
+
+                let exists = false;
+                for (let i = 0; i < select.options.length; i++) {
+                    if (select.options[i].value === match) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    const opt = document.createElement("option");
+                    opt.value = match;
+                    opt.textContent = match;
+                    opt.style.background = "var(--bg-card)";
+                    opt.style.color = "var(--fg)";
+                    select.insertBefore(
+                        opt,
+                        select.querySelector('option[value="custom"]'),
+                    );
+                }
+                select.value = match;
+            } else if (devices.length > 0) {
+                select.value = devices[0];
+                vlcConnectedIp = devices[0];
+                localStorage.setItem("vlc_connected_ip", devices[0]);
+            } else if (currentSelectedVal) {
+                const opt = document.createElement("option");
+                opt.value = currentSelectedVal;
+                opt.textContent = currentSelectedVal;
+                opt.selected = true;
+                opt.style.background = "var(--bg-card)";
+                opt.style.color = "var(--fg)";
+                select.insertBefore(
+                    opt,
+                    select.querySelector('option[value="custom"]'),
+                );
+                select.value = currentSelectedVal;
+            }
+
+            await checkVlcConnection();
+
+            if (devices.length === 0) {
+                if (statusMsg) {
+                    statusMsg.textContent = "No VLC devices found";
+                    statusMsg.style.color = "var(--fg-muted)";
+                }
+            }
+        } catch (err) {
+            console.error("Scan failed:", err);
+            if (statusMsg) {
+                statusMsg.textContent = "Scan failed";
+                statusMsg.style.color = "#ff5e57";
+            }
+            await checkVlcConnection();
+        } finally {
+            refreshBtn.classList.remove("vlc-rotate-spin");
+            select.disabled = false;
+        }
+    });
+
+    helpBtn.addEventListener("click", () => {
+        modal.classList.remove("hidden");
+    });
+
+    closeBtn.addEventListener("click", () => {
+        modal.classList.add("hidden");
+    });
+
+    okBtn.addEventListener("click", () => {
+        modal.classList.add("hidden");
+    });
+
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) {
+            modal.classList.add("hidden");
+        }
+    });
+
+    initIphoneViewEvents();
+}
+
+let iphoneActiveTab = "songs";
+let iphoneViewMode = "list";
+let iphoneSearchQuery = "";
+
+function renderIphoneView() {
+    const statsIp = document.getElementById("iphone-stats-ip");
+    const statsCount = document.getElementById("iphone-stats-count");
+    if (statsIp) statsIp.textContent = `IP: ${vlcConnectedIp}`;
+    if (statsCount)
+        statsCount.textContent = `${vlcTracks.length} track${vlcTracks.length === 1 ? "" : "s"}`;
+
+    const songsContainer = document.getElementById("iphone-songs-container");
+    const artistsContainer = document.getElementById(
+        "iphone-artists-container",
+    );
+    const albumsContainer = document.getElementById("iphone-albums-container");
+
+    let songsList = [...vlcTracks];
+
+    if (iphoneSearchQuery) {
+        const q = iphoneSearchQuery.toLowerCase();
+        songsList = songsList.filter(
+            (s) =>
+                s.title.toLowerCase().includes(q) ||
+                s.artist.toLowerCase().includes(q) ||
+                s.album.toLowerCase().includes(q) ||
+                s.filename.toLowerCase().includes(q),
+        );
+    }
+
+    if (iphoneActiveTab === "songs") {
+        if (songsContainer) songsContainer.classList.remove("hidden");
+        if (artistsContainer) artistsContainer.classList.add("hidden");
+        if (albumsContainer) albumsContainer.classList.add("hidden");
+
+        const listViewWrapper = document.getElementById(
+            "iphone-songs-list-view",
+        );
+        const gridViewWrapper = document.getElementById(
+            "iphone-songs-grid-view",
+        );
+
+        if (iphoneViewMode === "list") {
+            if (listViewWrapper) listViewWrapper.classList.remove("hidden");
+            if (gridViewWrapper) gridViewWrapper.classList.add("hidden");
+
+            const tbody = document.getElementById("iphone-songs-body");
+            if (tbody) {
+                tbody.innerHTML = "";
+                songsList.sort((a, b) => a.title.localeCompare(b.title));
+
+                if (songsList.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; padding: 30px; color: var(--fg-muted);">No tracks found.</td></tr>`;
+                } else {
+                    songsList.forEach((song) => {
+                        const tr = document.createElement("tr");
+                        tr.dataset.filename = song.filename;
+                        tr.style.borderBottom =
+                            "1px solid rgba(255,255,255,0.04)";
+                        tr.style.transition = "background 0.2s";
+                        tr.addEventListener(
+                            "mouseenter",
+                            () =>
+                                (tr.style.background =
+                                    "rgba(255,255,255,0.02)"),
+                        );
+                        tr.addEventListener(
+                            "mouseleave",
+                            () => (tr.style.background = "transparent"),
+                        );
+
+                        // Album Art Column
+                        const artTd = document.createElement("td");
+                        artTd.style.padding = "8px 10px";
+                        artTd.style.textAlign = "center";
+
+                        const img = document.createElement("img");
+                        img.style.width = "38px";
+                        img.style.height = "38px";
+                        img.style.borderRadius = "4px";
+                        img.style.objectFit = "cover";
+                        img.style.border = "1px solid rgba(255,255,255,0.1)";
+                        if (song.thumbnail_url) {
+                            img.src = `http://${vlcConnectedIp}/${song.thumbnail_url}`;
+                        } else {
+                            img.src =
+                                "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' viewBox='0 0 40 40'><rect width='40' height='40' fill='%23282828'/><circle cx='16' cy='28' r='5' fill='%23666'/><path d='M21 10v18M21 14l10-2v-4z' stroke='%23666' stroke-width='2' fill='none'/></svg>";
+                        }
+                        artTd.appendChild(img);
+
+                        // Title Column
+                        const titleTd = document.createElement("td");
+                        titleTd.style.padding = "12px 10px";
+                        titleTd.style.fontWeight = "600";
+                        titleTd.style.color = "#fff";
+
+                        const titleSpan = document.createElement("span");
+                        titleSpan.textContent = song.title;
+                        titleTd.appendChild(titleSpan);
+
+                        if (song.artwork_missing) {
+                            const errBadge = document.createElement("span");
+                            errBadge.textContent = " No Art";
+                            errBadge.title =
+                                "No embedded album artwork found in VLC database for this file.";
+                            errBadge.style.fontSize = "0.68rem";
+                            errBadge.style.background =
+                                "rgba(255, 176, 0, 0.15)";
+                            errBadge.style.color = "#ffb000";
+                            errBadge.style.padding = "2px 6px";
+                            errBadge.style.borderRadius = "4px";
+                            errBadge.style.marginLeft = "8px";
+                            errBadge.style.fontWeight = "bold";
+                            titleTd.appendChild(errBadge);
+                        }
+
+                        // Artist Column
+                        const artistTd = document.createElement("td");
+                        artistTd.style.padding = "12px 10px";
+                        artistTd.style.color = "var(--fg-muted)";
+                        artistTd.textContent = song.artist;
+                        if (song.artist_missing) {
+                            artistTd.style.color = "#ff5e57";
+                            artistTd.textContent =
+                                "Unknown (No separator in filename)";
+                        }
+
+                        // Album Column
+                        const albumTd = document.createElement("td");
+                        albumTd.style.padding = "12px 10px";
+                        albumTd.style.color = "var(--fg-muted)";
+                        albumTd.textContent = song.album;
+                        if (song.album_missing) {
+                            albumTd.style.color = "#ffb000";
+                            albumTd.style.fontStyle = "italic";
+                        }
+
+                        // Metadata Status Column
+                        const statusTd = document.createElement("td");
+                        statusTd.style.padding = "12px 10px";
+                        statusTd.style.textAlign = "right";
+
+                        const statusBadge = document.createElement("span");
+                        statusBadge.style.fontSize = "0.7rem";
+                        statusBadge.style.padding = "4px 8px";
+                        statusBadge.style.borderRadius = "12px";
+                        statusBadge.style.fontWeight = "600";
+                        statusBadge.style.display = "inline-block";
+
+                        if (
+                            !song.artwork_missing &&
+                            !song.artist_missing &&
+                            !song.album_missing
+                        ) {
+                            statusBadge.textContent = "Healthy";
+                            statusBadge.style.background =
+                                "rgba(29, 185, 84, 0.12)";
+                            statusBadge.style.color = "#1db954";
+                            statusBadge.title =
+                                "All metadata fields parsed correctly!";
+                        } else {
+                            let missingList = [];
+                            if (song.artist_missing) missingList.push("Artist");
+                            if (song.album_missing) missingList.push("Album");
+                            if (song.artwork_missing)
+                                missingList.push("Artwork");
+
+                            statusBadge.textContent = `Missing ${missingList.join(", ")}`;
+                            statusBadge.style.background =
+                                "rgba(255, 176, 0, 0.12)";
+                            statusBadge.style.color = "#ffb000";
+                            statusBadge.title = `Missing fields: ${missingList.join(", ")}`;
+                        }
+                        statusTd.appendChild(statusBadge);
+
+                        // Actions Column
+                        const actionsTd = document.createElement("td");
+                        actionsTd.style.padding = "8px 10px";
+                        actionsTd.style.textAlign = "center";
+
+                        const fixBtn = document.createElement("button");
+                        const activeFixStatus = activeFixes.get(song.filename);
+                        if (activeFixStatus) {
+                            fixBtn.disabled = true;
+                            fixBtn.innerHTML = `<span class="inline-spinner" style="display:inline-block; width:10px; height:10px; border:2px solid rgba(255,255,255,0.2); border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite; margin-right:5px;"></span> ${activeFixStatus}`;
+                        } else {
+                            fixBtn.textContent = "Fix";
+                        }
+                        fixBtn.style.background = "rgba(255, 255, 255, 0.05)";
+                        fixBtn.style.border =
+                            "1px solid rgba(255, 255, 255, 0.15)";
+                        fixBtn.style.color = "#fff";
+                        fixBtn.style.borderRadius = "4px";
+                        fixBtn.style.padding = "4px 10px";
+                        fixBtn.style.cursor = "pointer";
+                        fixBtn.style.fontSize = "0.75rem";
+                        fixBtn.style.transition = "all 0.2s";
+                        fixBtn.addEventListener("mouseenter", () => {
+                            fixBtn.style.background = "rgba(29, 185, 84, 0.15)";
+                            fixBtn.style.borderColor = "var(--accent)";
+                            fixBtn.style.color = "var(--accent)";
+                        });
+                        fixBtn.addEventListener("mouseleave", () => {
+                            fixBtn.style.background =
+                                "rgba(255, 255, 255, 0.05)";
+                            fixBtn.style.borderColor =
+                                "rgba(255, 255, 255, 0.15)";
+                            fixBtn.style.color = "#fff";
+                        });
+                        fixBtn.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            openFixMetadataModal(song);
+                        });
+                        actionsTd.appendChild(fixBtn);
+
+                        tr.appendChild(artTd);
+                        tr.appendChild(titleTd);
+                        tr.appendChild(artistTd);
+                        tr.appendChild(albumTd);
+                        tr.appendChild(statusTd);
+                        tr.appendChild(actionsTd);
+                        tbody.appendChild(tr);
+                    });
+                }
+            }
+        } else if (iphoneViewMode === "grid") {
+            if (listViewWrapper) listViewWrapper.classList.add("hidden");
+            if (gridViewWrapper) gridViewWrapper.classList.remove("hidden");
+
+            const grid = document.getElementById("iphone-songs-grid");
+            if (grid) {
+                grid.innerHTML = "";
+                songsList.sort((a, b) => a.title.localeCompare(b.title));
+
+                if (songsList.length === 0) {
+                    grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; color: var(--fg-muted);">No tracks found.</div>`;
+                } else {
+                    songsList.forEach((song) => {
+                        const card = document.createElement("div");
+                        card.style.background = "rgba(255, 255, 255, 0.02)";
+                        card.style.border =
+                            "1px solid rgba(255, 255, 255, 0.05)";
+                        card.style.borderRadius = "10px";
+                        card.style.padding = "12px";
+                        card.style.textAlign = "left";
+                        card.style.display = "flex";
+                        card.style.flexDirection = "column";
+                        card.style.gap = "8px";
+                        card.style.transition = "all 0.2s ease";
+                        card.style.cursor = "pointer";
+                        card.addEventListener("mouseenter", () => {
+                            card.style.background = "rgba(255, 255, 255, 0.05)";
+                            card.style.borderColor = "rgba(29, 185, 84, 0.2)";
+                        });
+                        card.addEventListener("mouseleave", () => {
+                            card.style.background = "rgba(255, 255, 255, 0.02)";
+                            card.style.borderColor =
+                                "rgba(255, 255, 255, 0.05)";
+                        });
+
+                        card.addEventListener("dblclick", () => {
+                            openFixMetadataModal(song);
+                        });
+                        card.title = "Double-click to fix track metadata";
+
+                        // Image Wrapper
+                        const imgWrapper = document.createElement("div");
+                        imgWrapper.style.width = "100%";
+                        imgWrapper.style.paddingBottom = "100%";
+                        imgWrapper.style.position = "relative";
+                        imgWrapper.style.borderRadius = "6px";
+                        imgWrapper.style.overflow = "hidden";
+                        imgWrapper.style.background = "#282828";
+                        imgWrapper.style.border =
+                            "1px solid rgba(255,255,255,0.08)";
+
+                        const img = document.createElement("img");
+                        img.style.position = "absolute";
+                        img.style.top = "0";
+                        img.style.left = "0";
+                        img.style.width = "100%";
+                        img.style.height = "100%";
+                        img.style.objectFit = "cover";
+                        if (song.thumbnail_url) {
+                            img.src = `http://${vlcConnectedIp}/${song.thumbnail_url}`;
+                        } else {
+                            img.src =
+                                "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23282828'/><circle cx='40' cy='70' r='12' fill='%23444'/><path d='M52 20v50M52 30l30-5v-10z' stroke='%23444' stroke-width='4' fill='none'/></svg>";
+                        }
+                        imgWrapper.appendChild(img);
+
+                        // If warning exists, put badge overlay
+                        if (
+                            song.artwork_missing ||
+                            song.artist_missing ||
+                            song.album_missing
+                        ) {
+                            const badge = document.createElement("div");
+                            badge.style.position = "absolute";
+                            badge.style.top = "6px";
+                            badge.style.right = "6px";
+                            badge.style.background = "rgba(255, 176, 0, 0.9)";
+                            badge.style.color = "#000";
+                            badge.style.padding = "2px 6px";
+                            badge.style.borderRadius = "4px";
+                            badge.style.fontSize = "0.65rem";
+                            badge.style.fontWeight = "bold";
+
+                            let text = "Art Missing";
+                            if (song.artist_missing || song.album_missing) {
+                                text = "Meta Missing";
+                            }
+                            badge.textContent = text;
+
+                            let missingMsg = [];
+                            if (song.artist_missing) missingMsg.push("Artist");
+                            if (song.album_missing) missingMsg.push("Album");
+                            if (song.artwork_missing)
+                                missingMsg.push("Artwork");
+                            badge.title = `Missing: ${missingMsg.join(", ")}`;
+                            imgWrapper.appendChild(badge);
+                        }
+
+                        // Title
+                        const title = document.createElement("div");
+                        title.style.fontWeight = "700";
+                        title.style.fontSize = "0.82rem";
+                        title.style.color = "#fff";
+                        title.style.whiteSpace = "nowrap";
+                        title.style.overflow = "hidden";
+                        title.style.textOverflow = "ellipsis";
+                        title.textContent = song.title;
+
+                        // Artist
+                        const artist = document.createElement("div");
+                        artist.style.fontSize = "0.75rem";
+                        artist.style.color = "var(--fg-muted)";
+                        artist.style.whiteSpace = "nowrap";
+                        artist.style.overflow = "hidden";
+                        artist.style.textOverflow = "ellipsis";
+                        artist.textContent = song.artist;
+                        if (song.artist_missing) {
+                            artist.style.color = "#ff5e57";
+                            artist.textContent = "Unknown Artist";
+                        }
+
+                        // Album
+                        const album = document.createElement("div");
+                        album.style.fontSize = "0.72rem";
+                        album.style.color = "var(--fg-muted)";
+                        album.style.whiteSpace = "nowrap";
+                        album.style.overflow = "hidden";
+                        album.style.textOverflow = "ellipsis";
+                        album.textContent = song.album;
+                        if (song.album_missing) {
+                            album.style.color = "#ffb000";
+                            album.style.fontStyle = "italic";
+                        }
+
+                        // Extra row (Format badge)
+                        const bottomRow = document.createElement("div");
+                        bottomRow.style.display = "flex";
+                        bottomRow.style.justifyContent = "space-between";
+                        bottomRow.style.alignItems = "center";
+                        bottomRow.style.marginTop = "4px";
+
+                        const extBadge = document.createElement("span");
+                        extBadge.textContent = song.ext;
+                        extBadge.style.fontSize = "0.6rem";
+                        extBadge.style.background = "rgba(255,255,255,0.06)";
+                        extBadge.style.color = "var(--fg-muted)";
+                        extBadge.style.padding = "1px 5px";
+                        extBadge.style.borderRadius = "3px";
+                        bottomRow.appendChild(extBadge);
+
+                        const detailSpan = document.createElement("span");
+                        detailSpan.textContent =
+                            song.second_line.split(" - ")[0]; // E.g., just size
+                        detailSpan.style.fontSize = "0.65rem";
+                        detailSpan.style.color = "var(--fg-muted)";
+                        bottomRow.appendChild(detailSpan);
+
+                        card.appendChild(imgWrapper);
+                        card.appendChild(title);
+                        card.appendChild(artist);
+                        card.appendChild(album);
+                        card.appendChild(bottomRow);
+                        grid.appendChild(card);
+                    });
+                }
+            }
+        }
+    } else if (iphoneActiveTab === "artists") {
+        if (songsContainer) songsContainer.classList.add("hidden");
+        if (artistsContainer) artistsContainer.classList.remove("hidden");
+        if (albumsContainer) albumsContainer.classList.add("hidden");
+
+        const grid = document.getElementById("iphone-artists-grid");
+        if (grid) {
+            grid.innerHTML = "";
+            const artistMap = {};
+            songsList.forEach((song) => {
+                artistMap[song.artist] = (artistMap[song.artist] || 0) + 1;
+            });
+
+            let artistsList = Object.keys(artistMap).map((name) => ({
+                name,
+                count: artistMap[name],
+            }));
+
+            artistsList.sort((a, b) => a.name.localeCompare(b.name));
+
+            if (artistsList.length === 0) {
+                grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; color: var(--fg-muted);">No artists found.</div>`;
+            } else {
+                artistsList.forEach((art) => {
+                    const card = document.createElement("div");
+                    card.style.background = "rgba(255, 255, 255, 0.02)";
+                    card.style.border = "1px solid rgba(255, 255, 255, 0.05)";
+                    card.style.borderRadius = "12px";
+                    card.style.padding = "20px 16px";
+                    card.style.textAlign = "center";
+                    card.style.transition = "all 0.25s ease";
+                    card.addEventListener("mouseenter", () => {
+                        card.style.background = "rgba(255, 255, 255, 0.05)";
+                        card.style.transform = "translateY(-2px)";
+                        card.style.borderColor = "rgba(29, 185, 84, 0.2)";
+                    });
+                    card.addEventListener("mouseleave", () => {
+                        card.style.background = "rgba(255, 255, 255, 0.02)";
+                        card.style.transform = "translateY(0)";
+                        card.style.borderColor = "rgba(255, 255, 255, 0.05)";
+                    });
+
+                    const avatar = document.createElement("div");
+                    avatar.style.width = "70px";
+                    avatar.style.height = "70px";
+                    avatar.style.borderRadius = "50%";
+                    avatar.style.background =
+                        "linear-gradient(135deg, #1db954 30%, #00d2ff)";
+                    avatar.style.margin = "0 auto 12px auto";
+                    avatar.style.display = "flex";
+                    avatar.style.alignItems = "center";
+                    avatar.style.justifyContent = "center";
+                    avatar.style.fontSize = "1.5rem";
+                    avatar.textContent = art.name
+                        ? art.name.charAt(0).toUpperCase()
+                        : "?";
+                    avatar.style.color = "#fff";
+                    avatar.style.fontWeight = "bold";
+
+                    const name = document.createElement("div");
+                    name.style.fontWeight = "700";
+                    name.style.fontSize = "0.9rem";
+                    name.style.color = "#fff";
+                    name.style.textOverflow = "ellipsis";
+                    name.style.overflow = "hidden";
+                    name.style.whiteSpace = "nowrap";
+                    name.textContent = art.name;
+
+                    const count = document.createElement("div");
+                    count.style.fontSize = "0.75rem";
+                    count.style.color = "var(--fg-muted)";
+                    count.style.marginTop = "4px";
+                    count.textContent = `${art.count} track${art.count === 1 ? "" : "s"}`;
+
+                    card.appendChild(avatar);
+                    card.appendChild(name);
+                    card.appendChild(count);
+                    grid.appendChild(card);
+                });
+            }
+        }
+    } else if (iphoneActiveTab === "albums") {
+        if (songsContainer) songsContainer.classList.add("hidden");
+        if (artistsContainer) artistsContainer.classList.add("hidden");
+        if (albumsContainer) albumsContainer.classList.remove("hidden");
+
+        const grid = document.getElementById("iphone-albums-grid");
+        if (grid) {
+            grid.innerHTML = "";
+            const albumsMap = {};
+            songsList.forEach((song) => {
+                const albumName = song.album || "Unknown Album";
+                if (!albumsMap[albumName]) {
+                    albumsMap[albumName] = {
+                        name: albumName,
+                        tracks: [],
+                        artwork: null,
+                        artist: "",
+                    };
+                }
+                albumsMap[albumName].tracks.push(song);
+                if (!albumsMap[albumName].artwork && song.thumbnail_url) {
+                    albumsMap[albumName].artwork = song.thumbnail_url;
+                }
+            });
+
+            const albumsList = Object.values(albumsMap);
+            albumsList.forEach((alb) => {
+                alb.tracks.sort((a, b) => a.track_number - b.track_number);
+                const artists = [
+                    ...new Set(alb.tracks.map((t) => t.artist)),
+                ].filter((a) => a && a !== "Unknown Artist");
+                if (artists.length === 0) {
+                    alb.artist = "Unknown Artist";
+                } else if (artists.length === 1) {
+                    alb.artist = artists[0];
+                } else {
+                    alb.artist = "Various Artists";
+                }
+            });
+
+            albumsList.sort((a, b) => a.name.localeCompare(b.name));
+
+            if (albumsList.length === 0) {
+                grid.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 30px; color: var(--fg-muted);">No albums found.</div>`;
+            } else {
+                albumsList.forEach((alb) => {
+                    const card = document.createElement("div");
+                    card.style.background = "rgba(255, 255, 255, 0.02)";
+                    card.style.border = "1px solid rgba(255, 255, 255, 0.05)";
+                    card.style.borderRadius = "12px";
+                    card.style.padding = "16px";
+                    card.style.textAlign = "left";
+                    card.style.display = "flex";
+                    card.style.flexDirection = "column";
+                    card.style.gap = "10px";
+                    card.style.transition = "all 0.25s ease";
+                    card.style.cursor = "pointer";
+                    card.addEventListener("mouseenter", () => {
+                        card.style.background = "rgba(255, 255, 255, 0.05)";
+                        card.style.transform = "translateY(-2px)";
+                        card.style.borderColor = "rgba(29, 185, 84, 0.2)";
+                    });
+                    card.addEventListener("mouseleave", () => {
+                        card.style.background = "rgba(255, 255, 255, 0.02)";
+                        card.style.transform = "translateY(0)";
+                        card.style.borderColor = "rgba(255, 255, 255, 0.05)";
+                    });
+
+                    card.addEventListener("click", () => {
+                        openAlbumDetailsModal(alb);
+                    });
+
+                    // Image wrapper
+                    const imgWrapper = document.createElement("div");
+                    imgWrapper.style.width = "100%";
+                    imgWrapper.style.paddingBottom = "100%";
+                    imgWrapper.style.position = "relative";
+                    imgWrapper.style.borderRadius = "8px";
+                    imgWrapper.style.overflow = "hidden";
+                    imgWrapper.style.background = "#282828";
+                    imgWrapper.style.border =
+                        "1px solid rgba(255,255,255,0.08)";
+
+                    const img = document.createElement("img");
+                    img.style.position = "absolute";
+                    img.style.top = "0";
+                    img.style.left = "0";
+                    img.style.width = "100%";
+                    img.style.height = "100%";
+                    img.style.objectFit = "cover";
+                    if (alb.artwork) {
+                        img.src = `http://${vlcConnectedIp}/${alb.artwork}`;
+                    } else {
+                        img.src =
+                            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23282828'/><circle cx='40' cy='70' r='12' fill='%23444'/><path d='M52 20v50M52 30l30-5v-10z' stroke='%23444' stroke-width='4' fill='none'/></svg>";
+                    }
+                    imgWrapper.appendChild(img);
+
+                    const isMissing =
+                        alb.name === "Unknown Album" || alb.name === "No Album";
+                    if (isMissing) {
+                        const badge = document.createElement("div");
+                        badge.style.position = "absolute";
+                        badge.style.top = "6px";
+                        badge.style.right = "6px";
+                        badge.style.background = "#ffb000";
+                        badge.style.color = "#000";
+                        badge.style.padding = "2px 6px";
+                        badge.style.borderRadius = "4px";
+                        badge.style.fontSize = "0.65rem";
+                        badge.style.fontWeight = "bold";
+                        badge.textContent = "No Album";
+                        imgWrapper.appendChild(badge);
+                    }
+
+                    const name = document.createElement("div");
+                    name.style.fontWeight = "700";
+                    name.style.fontSize = "0.9rem";
+                    name.style.color = "#fff";
+                    name.style.textOverflow = "ellipsis";
+                    name.style.overflow = "hidden";
+                    name.style.whiteSpace = "nowrap";
+                    name.textContent = alb.name;
+
+                    const artist = document.createElement("div");
+                    artist.style.fontSize = "0.75rem";
+                    artist.style.color = "var(--fg-muted)";
+                    artist.style.textOverflow = "ellipsis";
+                    artist.style.overflow = "hidden";
+                    artist.style.whiteSpace = "nowrap";
+                    artist.textContent = alb.artist;
+
+                    const count = document.createElement("div");
+                    count.style.fontSize = "0.7rem";
+                    count.style.color = "var(--accent)";
+                    count.style.marginTop = "2px";
+                    count.style.fontWeight = "600";
+                    count.textContent = `${alb.tracks.length} track${alb.tracks.length === 1 ? "" : "s"}`;
+
+                    card.appendChild(imgWrapper);
+                    card.appendChild(name);
+                    card.appendChild(artist);
+                    card.appendChild(count);
+                    grid.appendChild(card);
+                });
+            }
+        }
+    }
+}
+
+const activeFixes = new Map();
+
+function cleanMetaSearch(title, artist) {
+    let t = title || "";
+    let a = artist || "";
+
+    // Replace curly quotes/apostrophes with straight quotes
+    t = t.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+    a = a.replace(/[\u2018\u2019]/g, "'").replace(/[\u201C\u201D]/g, '"');
+
+    // 1. Remove feat, ft, with, featuring from title
+    t = t.replace(/\s*[\(\[](feat|ft|with|featuring)\.?\s+.*?[\]\)]/gi, "");
+    t = t.replace(/\s*-\s*(feat|ft|with|featuring)\.?\s+.*/gi, "");
+
+    // 2. Remove trailing/leading underscores
+    t = t.replace(/_+$/, "");
+    a = a.replace(/_+$/, "");
+
+    // Remove trailing dashes and trim
+    t = t.replace(/\s*-\s*$/, "");
+    t = t.trim();
+    a = a.trim();
+
+    return { title: t, artist: a };
+}
+
+function updateFixProgressInDOM(filename, status) {
+    const escaped = CSS.escape(filename);
+    const rows = document.querySelectorAll(`tr[data-filename="${escaped}"]`);
+    rows.forEach((row) => {
+        const btn = row.querySelector("button");
+        if (btn) {
+            if (status === "complete") {
+                btn.disabled = false;
+                btn.textContent = "Fix";
+            } else {
+                btn.disabled = true;
+                btn.innerHTML = `<span class="inline-spinner" style="display:inline-block; width:10px; height:10px; border:2px solid rgba(255,255,255,0.2); border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite; margin-right:5px;"></span> ${status}`;
+            }
+        }
+    });
+}
+
+function openFixMetadataModal(song) {
+    const modal = document.createElement("div");
+    modal.style.position = "fixed";
+    modal.style.top = "0";
+    modal.style.left = "0";
+    modal.style.width = "100%";
+    modal.style.height = "100%";
+    modal.style.background = "rgba(0,0,0,0.85)";
+    modal.style.backdropFilter = "blur(8px)";
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+    modal.style.zIndex = "99999";
+
+    const content = document.createElement("div");
+    content.style.background = "var(--bg-card)";
+    content.style.border = "1px solid rgba(255,255,255,0.1)";
+    content.style.borderRadius = "12px";
+    content.style.padding = "24px";
+    content.style.width = "620px";
+    content.style.maxHeight = "90vh";
+    content.style.overflowY = "auto";
+    content.style.display = "flex";
+    content.style.flexDirection = "column";
+    content.style.gap = "16px";
+    content.style.boxShadow = "0 20px 40px rgba(0,0,0,0.5)";
+
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+
+    const title = document.createElement("h3");
+    title.style.margin = "0";
+    title.style.fontSize = "1.3rem";
+    title.style.fontWeight = "800";
+    title.style.color = "#fff";
+    title.textContent = "Fix Track Metadata";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.style.background = "transparent";
+    closeBtn.style.border = "none";
+    closeBtn.style.color = "var(--fg-muted)";
+    closeBtn.style.fontSize = "1.2rem";
+    closeBtn.style.cursor = "pointer";
+    closeBtn.addEventListener("click", () => modal.remove());
+
+    header.appendChild(title);
+    header.appendChild(closeBtn);
+    content.appendChild(header);
+
+    const filenameInfo = document.createElement("div");
+    filenameInfo.style.fontSize = "0.75rem";
+    filenameInfo.style.color = "var(--fg-muted)";
+    filenameInfo.style.background = "rgba(255,255,255,0.02)";
+    filenameInfo.style.border = "1px solid rgba(255,255,255,0.05)";
+    filenameInfo.style.padding = "8px 12px";
+    filenameInfo.style.borderRadius = "6px";
+    filenameInfo.style.wordBreak = "break-all";
+    filenameInfo.innerHTML = `<strong>File:</strong> ${escapeHtml(song.filename)}`;
+    content.appendChild(filenameInfo);
+
+    const formGrid = document.createElement("div");
+    formGrid.style.display = "grid";
+    formGrid.style.gridTemplateColumns = "1fr 1fr";
+    formGrid.style.gap = "12px";
+
+    const createField = (label, id, value, type = "text") => {
+        const wrap = document.createElement("div");
+        wrap.style.display = "flex";
+        wrap.style.flexDirection = "column";
+        wrap.style.gap = "4px";
+
+        const lbl = document.createElement("label");
+        lbl.style.fontSize = "0.75rem";
+        lbl.style.color = "var(--fg-muted)";
+        lbl.style.fontWeight = "600";
+        lbl.textContent = label;
+
+        const input = document.createElement("input");
+        input.type = type;
+        input.id = id;
+        input.value = value;
+        input.style.background = "rgba(255,255,255,0.05)";
+        input.style.border = "1px solid rgba(255,255,255,0.1)";
+        input.style.borderRadius = "6px";
+        input.style.padding = "8px 12px";
+        input.style.color = "#fff";
+        input.style.fontSize = "0.85rem";
+        input.style.outline = "none";
+        input.style.transition = "border 0.2s";
+        input.addEventListener(
+            "focus",
+            () => (input.style.borderColor = "var(--accent)"),
+        );
+        input.addEventListener(
+            "blur",
+            () => (input.style.borderColor = "rgba(255,255,255,0.1)"),
+        );
+
+        wrap.appendChild(lbl);
+        wrap.appendChild(input);
+        return { wrap, input };
+    };
+
+    const fTitle = createField("Track Title", "fix-title", song.title);
+    const fArtist = createField(
+        "Artist",
+        "fix-artist",
+        song.artist_missing ? "" : song.artist,
+    );
+    const fAlbum = createField(
+        "Album Title",
+        "fix-album",
+        song.album_missing ? "" : song.album,
+    );
+    const fTrackNum = createField(
+        "Track Number",
+        "fix-track-number",
+        song.track_number || "1",
+        "number",
+    );
+    const fCoverUrl = createField("Cover Art Image URL", "fix-cover-url", "");
+    fCoverUrl.wrap.style.gridColumn = "1/-1";
+
+    formGrid.appendChild(fTitle.wrap);
+    formGrid.appendChild(fArtist.wrap);
+    formGrid.appendChild(fAlbum.wrap);
+    formGrid.appendChild(fTrackNum.wrap);
+    formGrid.appendChild(fCoverUrl.wrap);
+    content.appendChild(formGrid);
+
+    const searchArea = document.createElement("div");
+    searchArea.style.display = "flex";
+    searchArea.style.flexDirection = "column";
+    searchArea.style.gap = "8px";
+
+    const searchRow = document.createElement("div");
+    searchRow.style.display = "flex";
+    searchRow.style.gap = "8px";
+
+    const searchBtn = document.createElement("button");
+    searchBtn.textContent = "Search Spotify";
+    searchBtn.style.background = "rgba(29, 185, 84, 0.15)";
+    searchBtn.style.border = "1px solid var(--accent)";
+    searchBtn.style.color = "var(--accent)";
+    searchBtn.style.borderRadius = "6px";
+    searchBtn.style.padding = "8px 16px";
+    searchBtn.style.cursor = "pointer";
+    searchBtn.style.fontWeight = "bold";
+    searchBtn.style.fontSize = "0.85rem";
+
+    const searchResults = document.createElement("div");
+    searchResults.style.maxHeight = "150px";
+    searchResults.style.overflowY = "auto";
+    searchResults.style.display = "flex";
+    searchResults.style.flexDirection = "column";
+    searchResults.style.gap = "6px";
+    searchResults.style.border = "1px solid rgba(255,255,255,0.05)";
+    searchResults.style.borderRadius = "6px";
+    searchResults.style.padding = "6px";
+    searchResults.style.background = "rgba(0,0,0,0.2)";
+    searchResults.style.display = "none";
+
+    searchBtn.addEventListener("click", async () => {
+        const rawTitle = fTitle.input.value.trim();
+        const rawArtist = fArtist.input.value.trim();
+        const cleaned = cleanMetaSearch(rawTitle, rawArtist);
+        const queryClean = `${cleaned.title} ${cleaned.artist}`.trim();
+        if (!queryClean) return;
+        searchBtn.textContent = "Searching...";
+        searchBtn.disabled = true;
+        try {
+            console.log(
+                `[VLC Sync] Manual search step 1 (cleaned): ${queryClean}`,
+            );
+            let jsonStr = await invoke("spotify_search", { query: queryClean });
+            let data = JSON.parse(jsonStr);
+            let results = data.tracks || [];
+
+            // Fallback 1: Raw query
+            if (results.length === 0) {
+                const queryRaw = `${rawTitle} ${rawArtist}`.trim();
+                if (queryRaw && queryRaw !== queryClean) {
+                    console.log(
+                        `[VLC Sync] Manual search fallback 1 (raw): ${queryRaw}`,
+                    );
+                    jsonStr = await invoke("spotify_search", {
+                        query: queryRaw,
+                    });
+                    data = JSON.parse(jsonStr);
+                    results = data.tracks || [];
+                }
+            }
+
+            // Fallback 2: Title only (cleaned)
+            if (results.length === 0) {
+                if (cleaned.title && cleaned.title !== rawTitle) {
+                    console.log(
+                        `[VLC Sync] Manual search fallback 2 (title only): ${cleaned.title}`,
+                    );
+                    jsonStr = await invoke("spotify_search", {
+                        query: cleaned.title,
+                    });
+                    data = JSON.parse(jsonStr);
+                    results = data.tracks || [];
+                }
+            }
+
+            searchResults.innerHTML = "";
+            searchResults.style.display = "flex";
+
+            if (results.length === 0) {
+                searchResults.innerHTML = `<div style="padding: 10px; color: var(--fg-muted); text-align: center; font-size: 0.8rem;">No results found on Spotify</div>`;
+            } else {
+                results.forEach((item) => {
+                    const row = document.createElement("div");
+                    row.style.display = "flex";
+                    row.style.alignItems = "center";
+                    row.style.gap = "10px";
+                    row.style.padding = "6px";
+                    row.style.borderRadius = "4px";
+                    row.style.background = "rgba(255,255,255,0.02)";
+                    row.style.transition = "background 0.2s";
+                    row.addEventListener(
+                        "mouseenter",
+                        () => (row.style.background = "rgba(255,255,255,0.05)"),
+                    );
+                    row.addEventListener(
+                        "mouseleave",
+                        () => (row.style.background = "rgba(255,255,255,0.02)"),
+                    );
+
+                    const art = item.image || item.cover_url || "";
+                    const img = document.createElement("img");
+                    img.style.width = "30px";
+                    img.style.height = "30px";
+                    img.style.borderRadius = "2px";
+                    img.src =
+                        art ||
+                        "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 30 30'><rect width='30' height='30' fill='%23282828'/></svg>";
+
+                    const info = document.createElement("div");
+                    info.style.flex = "1";
+                    info.style.minWidth = "0";
+
+                    const titleText = document.createElement("div");
+                    titleText.style.fontWeight = "bold";
+                    titleText.style.fontSize = "0.8rem";
+                    titleText.style.color = "#fff";
+                    titleText.style.overflow = "hidden";
+                    titleText.style.textOverflow = "ellipsis";
+                    titleText.style.whiteSpace = "nowrap";
+                    titleText.textContent = item.title;
+
+                    const descText = document.createElement("div");
+                    descText.style.fontSize = "0.7rem";
+                    descText.style.color = "var(--fg-muted)";
+                    descText.style.overflow = "hidden";
+                    descText.style.textOverflow = "ellipsis";
+                    descText.style.whiteSpace = "nowrap";
+                    descText.textContent = `${item.artist} · ${item.album}`;
+
+                    info.appendChild(titleText);
+                    info.appendChild(descText);
+
+                    const selectBtn = document.createElement("button");
+                    selectBtn.textContent = "Select";
+                    selectBtn.style.background = "var(--accent)";
+                    selectBtn.style.border = "none";
+                    selectBtn.style.color = "#000";
+                    selectBtn.style.borderRadius = "4px";
+                    selectBtn.style.padding = "4px 8px";
+                    selectBtn.style.cursor = "pointer";
+                    selectBtn.style.fontWeight = "bold";
+                    selectBtn.style.fontSize = "0.75rem";
+                    selectBtn.addEventListener("click", () => {
+                        fTitle.input.value = item.title;
+                        fArtist.input.value = item.artist;
+                        fAlbum.input.value = item.album;
+                        fTrackNum.input.value = item.track_number || "1";
+                        fCoverUrl.input.value = art;
+                    });
+
+                    row.appendChild(img);
+                    row.appendChild(info);
+                    row.appendChild(selectBtn);
+                    searchResults.appendChild(row);
+                });
+            }
+        } catch (err) {
+            console.error("Spotify search failed:", err);
+            searchResults.innerHTML = `<div style="padding: 10px; color: #ff5e57; text-align: center; font-size: 0.8rem;">Search failed: ${err}</div>`;
+            searchResults.style.display = "flex";
+        } finally {
+            searchBtn.textContent = "Search Spotify";
+            searchBtn.disabled = false;
+        }
+    });
+
+    searchRow.appendChild(searchBtn);
+    searchArea.appendChild(searchRow);
+    searchArea.appendChild(searchResults);
+    content.appendChild(searchArea);
+
+    const actions = document.createElement("div");
+    actions.style.display = "flex";
+    actions.style.justifyContent = "flex-end";
+    actions.style.gap = "12px";
+    actions.style.marginTop = "8px";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.style.background = "transparent";
+    cancelBtn.style.border = "1px solid rgba(255,255,255,0.1)";
+    cancelBtn.style.color = "var(--fg-muted)";
+    cancelBtn.style.borderRadius = "6px";
+    cancelBtn.style.padding = "8px 16px";
+    cancelBtn.style.cursor = "pointer";
+    cancelBtn.style.fontSize = "0.85rem";
+    cancelBtn.addEventListener("click", () => modal.remove());
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Save & Re-sync";
+    saveBtn.style.background = "var(--accent)";
+    saveBtn.style.border = "none";
+    saveBtn.style.color = "#000";
+    saveBtn.style.borderRadius = "6px";
+    saveBtn.style.padding = "8px 20px";
+    saveBtn.style.cursor = "pointer";
+    saveBtn.style.fontWeight = "bold";
+    saveBtn.style.fontSize = "0.85rem";
+
+    saveBtn.addEventListener("click", async () => {
+        // Clear modal content and render step-by-step progress tracker!
+        content.innerHTML = "";
+
+        const progressContainer = document.createElement("div");
+        progressContainer.style.display = "flex";
+        progressContainer.style.flexDirection = "column";
+        progressContainer.style.gap = "16px";
+        progressContainer.style.alignItems = "center";
+        progressContainer.style.justifyContent = "center";
+        progressContainer.style.padding = "40px 20px";
+        progressContainer.style.textAlign = "center";
+
+        const spinner = document.createElement("div");
+        spinner.style.width = "40px";
+        spinner.style.height = "40px";
+        spinner.style.border = "3px solid rgba(255, 255, 255, 0.1)";
+        spinner.style.borderTopColor = "var(--accent)";
+        spinner.style.borderRadius = "50%";
+        spinner.style.animation = "spin 1s linear infinite";
+
+        const progressTitle = document.createElement("div");
+        progressTitle.style.fontWeight = "bold";
+        progressTitle.style.fontSize = "1.1rem";
+        progressTitle.style.color = "#fff";
+        progressTitle.textContent = "Syncing & Overwriting...";
+
+        const progressStatus = document.createElement("div");
+        progressStatus.id = "fix-progress-status";
+        progressStatus.style.fontSize = "0.85rem";
+        progressStatus.style.color = "var(--fg-muted)";
+        progressStatus.textContent =
+            "1/4: Downloading audio file from device...";
+
+        const barWrapper = document.createElement("div");
+        barWrapper.style.width = "100%";
+        barWrapper.style.height = "6px";
+        barWrapper.style.background = "rgba(255, 255, 255, 0.05)";
+        barWrapper.style.borderRadius = "3px";
+        barWrapper.style.overflow = "hidden";
+        barWrapper.style.marginTop = "10px";
+
+        const progressBar = document.createElement("div");
+        progressBar.style.width = "25%";
+        progressBar.style.height = "100%";
+        progressBar.style.background = "var(--accent)";
+        progressBar.style.borderRadius = "3px";
+        progressBar.style.transition = "width 0.4s ease";
+
+        barWrapper.appendChild(progressBar);
+        progressContainer.appendChild(spinner);
+        progressContainer.appendChild(progressTitle);
+        progressContainer.appendChild(progressStatus);
+        progressContainer.appendChild(barWrapper);
+        content.appendChild(progressContainer);
+
+        const filename = song.filename;
+        activeFixes.set(filename, "Downloading...");
+        updateFixProgressInDOM(filename, "Downloading...");
+
+        // Step 1: Downloading from VLC
+        progressBar.style.width = "25%";
+        progressStatus.textContent =
+            "1/4: Downloading audio file from device...";
+        await new Promise((r) => setTimeout(r, 600));
+
+        // Step 2: Fetching cover art
+        progressBar.style.width = "50%";
+        progressStatus.textContent = "2/4: Fetching album artwork...";
+        activeFixes.set(filename, "Artwork...");
+        updateFixProgressInDOM(filename, "Artwork...");
+        await new Promise((r) => setTimeout(r, 600));
+
+        // Step 3: Injecting tags via lofty
+        progressBar.style.width = "75%";
+        progressStatus.textContent = "3/4: Writing metadata tags (Lofty)...";
+        activeFixes.set(filename, "Tagging...");
+        updateFixProgressInDOM(filename, "Tagging...");
+        await new Promise((r) => setTimeout(r, 600));
+
+        // Step 4: Re-uploading
+        progressBar.style.width = "90%";
+        progressStatus.textContent =
+            "4/4: Re-syncing with VLC (overwriting)...";
+        activeFixes.set(filename, "Uploading...");
+        updateFixProgressInDOM(filename, "Uploading...");
+
+        try {
+            console.log(
+                `[VLC Sync] Invoking vlc_fix_track_metadata for file: ${filename}`,
+            );
+            await invoke("vlc_fix_track_metadata", {
+                ip: vlcConnectedIp,
+                filename: filename,
+                title: fTitle.input.value.trim(),
+                artist: fArtist.input.value.trim(),
+                album: fAlbum.input.value.trim(),
+                trackNumber: parseInt(fTrackNum.input.value, 10) || 1,
+                coverUrl: fCoverUrl.input.value.trim() || null,
+            });
+
+            // Done!
+            progressBar.style.width = "100%";
+            progressStatus.textContent = "Success: Tagging complete!";
+            progressStatus.style.color = "var(--accent)";
+            activeFixes.delete(filename);
+            updateFixProgressInDOM(filename, "complete");
+
+            await new Promise((r) => setTimeout(r, 800));
+            modal.remove();
+
+            checkVlcConnection();
+        } catch (err) {
+            console.error(
+                `[VLC Sync] Error fixing metadata for ${filename}:`,
+                err,
+            );
+            activeFixes.delete(filename);
+            updateFixProgressInDOM(filename, "complete");
+
+            progressContainer.innerHTML = `
+                <div style="font-size: 2.5rem; margin-bottom: 12px;">⚠️</div>
+                <div style="font-weight: bold; font-size: 1.1rem; color: #ff5e57; margin-bottom: 8px;">Sync Overwrite Failed</div>
+                <div style="font-size: 0.85rem; color: var(--fg-muted); line-height: 1.4; margin-bottom: 16px; word-break: break-all;">
+                    ${escapeHtml(String(err))}
+                </div>
+                <button id="progress-err-ok-btn" style="background: var(--accent); border: none; color: #000; font-weight: bold; border-radius: 6px; padding: 8px 24px; cursor: pointer;">Close</button>
+            `;
+
+            progressContainer
+                .querySelector("#progress-err-ok-btn")
+                .addEventListener("click", () => {
+                    modal.remove();
+                });
+        }
+    });
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(saveBtn);
+    content.appendChild(actions);
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+
+    // Auto-fetch metadata from free APIs (Spotify / Last.fm fallback) on mount!
+    const runAutoFetch = async () => {
+        const titleVal = fTitle.input.value.trim();
+        const artistVal = fArtist.input.value.trim();
+        if (!titleVal) return;
+
+        const autoStatus = document.createElement("div");
+        autoStatus.style.fontSize = "0.75rem";
+        autoStatus.style.color = "var(--accent)";
+        autoStatus.style.padding = "6px 10px";
+        autoStatus.style.background = "rgba(29, 185, 84, 0.08)";
+        autoStatus.style.border = "1px solid rgba(29, 185, 84, 0.15)";
+        autoStatus.style.borderRadius = "6px";
+        autoStatus.style.marginTop = "8px";
+        autoStatus.innerHTML = `<span class="inline-spinner" style="display:inline-block; width:8px; height:8px; border:2px solid rgba(29, 185, 84, 0.2); border-top-color:var(--accent); border-radius:50%; animation:spin 1s linear infinite; margin-right:6px;"></span> Auto-fetching metadata details...`;
+        content.insertBefore(autoStatus, searchArea);
+
+        try {
+            let fetched = false;
+
+            // 1. Try Spotify Search with fallbacks
+            try {
+                const cleaned = cleanMetaSearch(titleVal, artistVal);
+                const queryClean = `${cleaned.title} ${cleaned.artist}`.trim();
+                console.log(
+                    `[VLC Sync] Auto-fetch Spotify query 1 (cleaned): ${queryClean}`,
+                );
+                let jsonStr = await invoke("spotify_search", {
+                    query: queryClean,
+                });
+                let data = JSON.parse(jsonStr);
+                let results = data.tracks || [];
+
+                // Fallback 1a: Raw title + raw artist
+                if (results.length === 0) {
+                    const queryRaw = `${titleVal} ${artistVal}`.trim();
+                    if (queryRaw && queryRaw !== queryClean) {
+                        console.log(
+                            `[VLC Sync] Auto-fetch Spotify fallback 1 (raw): ${queryRaw}`,
+                        );
+                        jsonStr = await invoke("spotify_search", {
+                            query: queryRaw,
+                        });
+                        data = JSON.parse(jsonStr);
+                        results = data.tracks || [];
+                    }
+                }
+
+                // Fallback 1b: Cleaned title only
+                if (results.length === 0) {
+                    if (cleaned.title && cleaned.title !== titleVal) {
+                        console.log(
+                            `[VLC Sync] Auto-fetch Spotify fallback 2 (title only): ${cleaned.title}`,
+                        );
+                        jsonStr = await invoke("spotify_search", {
+                            query: cleaned.title,
+                        });
+                        data = JSON.parse(jsonStr);
+                        results = data.tracks || [];
+                    }
+                }
+
+                if (results.length > 0) {
+                    const firstMatch = results[0];
+                    fTitle.input.value = firstMatch.title;
+                    fArtist.input.value = firstMatch.artist;
+                    fAlbum.input.value = firstMatch.album;
+                    fTrackNum.input.value = firstMatch.track_number || "1";
+                    fCoverUrl.input.value =
+                        firstMatch.image || firstMatch.cover_url || "";
+
+                    autoStatus.style.color = "var(--accent)";
+                    autoStatus.style.background = "rgba(29, 185, 84, 0.08)";
+                    autoStatus.style.borderColor = "rgba(29, 185, 84, 0.15)";
+                    autoStatus.textContent =
+                        "Auto-filled track details from Spotify.";
+                    fetched = true;
+                }
+            } catch (e) {
+                console.warn(
+                    "[VLC Sync] Spotify search failed, trying Last.fm fallback:",
+                    e,
+                );
+            }
+
+            // 2. Fallback to Last.fm (completely free out-of-the-box API)
+            if (!fetched) {
+                let meta = null;
+                try {
+                    console.log(
+                        `[VLC Sync] Auto-fetch Last.fm step 1: ${titleVal} - ${artistVal}`,
+                    );
+                    meta = await invoke("fetch_track_metadata", {
+                        artist: artistVal,
+                        track: titleVal,
+                    });
+                } catch (e) {
+                    console.warn(
+                        "[VLC Sync] Last.fm exact search failed, trying cleaned fallback:",
+                        e,
+                    );
+                }
+
+                // Fallback 2a: Cleaned title & artist for Last.fm
+                if (!meta) {
+                    const cleaned = cleanMetaSearch(titleVal, artistVal);
+                    if (
+                        cleaned.title !== titleVal ||
+                        cleaned.artist !== artistVal
+                    ) {
+                        try {
+                            console.log(
+                                `[VLC Sync] Auto-fetch Last.fm fallback (cleaned): ${cleaned.title} - ${cleaned.artist}`,
+                            );
+                            meta = await invoke("fetch_track_metadata", {
+                                artist: cleaned.artist,
+                                track: cleaned.title,
+                            });
+                        } catch (e) {
+                            console.warn(
+                                "[VLC Sync] Last.fm cleaned search failed:",
+                                e,
+                            );
+                        }
+                    }
+                }
+
+                if (meta) {
+                    fTitle.input.value = meta.title;
+                    fArtist.input.value = meta.artist;
+                    fAlbum.input.value = meta.album || "";
+                    const imgUrl =
+                        meta.album_images && meta.album_images.length
+                            ? meta.album_images[meta.album_images.length - 1]
+                                  .url
+                            : meta.track_images && meta.track_images.length
+                              ? meta.track_images[meta.track_images.length - 1]
+                                    .url
+                              : "";
+                    fCoverUrl.input.value = imgUrl;
+
+                    autoStatus.style.color = "var(--accent)";
+                    autoStatus.style.background = "rgba(29, 185, 84, 0.08)";
+                    autoStatus.style.borderColor = "rgba(29, 185, 84, 0.15)";
+                    autoStatus.textContent =
+                        "Auto-filled track details from Last.fm.";
+                    fetched = true;
+                }
+            }
+
+            if (!fetched) {
+                throw new Error(
+                    "No matching track metadata found on Spotify or Last.fm",
+                );
+            }
+        } catch (err) {
+            console.error("[VLC Sync] Auto-fetch failed:", err);
+            autoStatus.style.color = "#ff5e57";
+            autoStatus.style.background = "rgba(255, 94, 87, 0.08)";
+            autoStatus.style.borderColor = "rgba(255, 94, 87, 0.15)";
+            autoStatus.textContent =
+                "Auto-fetch failed. Please input details manually or search below.";
+        }
+    };
+
+    setTimeout(runAutoFetch, 100);
+}
+
+function openAlbumDetailsModal(album) {
+    const modal = document.createElement("div");
+    modal.style.position = "fixed";
+    modal.style.top = "0";
+    modal.style.left = "0";
+    modal.style.width = "100%";
+    modal.style.height = "100%";
+    modal.style.background = "rgba(0,0,0,0.85)";
+    modal.style.backdropFilter = "blur(8px)";
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+    modal.style.zIndex = "9999";
+
+    const content = document.createElement("div");
+    content.style.background = "var(--bg-card)";
+    content.style.border = "1px solid rgba(255,255,255,0.1)";
+    content.style.borderRadius = "12px";
+    content.style.padding = "24px";
+    content.style.width = "720px";
+    content.style.maxHeight = "85vh";
+    content.style.overflowY = "auto";
+    content.style.display = "flex";
+    content.style.flexDirection = "column";
+    content.style.gap = "20px";
+    content.style.boxShadow = "0 20px 40px rgba(0,0,0,0.6)";
+
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.gap = "20px";
+    header.style.position = "relative";
+
+    const img = document.createElement("img");
+    img.style.width = "100px";
+    img.style.height = "100px";
+    img.style.borderRadius = "8px";
+    img.style.objectFit = "cover";
+    img.style.border = "1px solid rgba(255,255,255,0.1)";
+    if (album.artwork) {
+        img.src = `http://${vlcConnectedIp}/${album.artwork}`;
+    } else {
+        img.src =
+            "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23282828'/><circle cx='40' cy='70' r='12' fill='%23444'/><path d='M52 20v50M52 30l30-5v-10z' stroke='%23444' stroke-width='4' fill='none'/></svg>";
+    }
+
+    const info = document.createElement("div");
+    info.style.display = "flex";
+    info.style.flexDirection = "column";
+    info.style.justifyContent = "center";
+    info.style.gap = "6px";
+
+    const albTitle = document.createElement("h3");
+    albTitle.style.margin = "0";
+    albTitle.style.fontSize = "1.5rem";
+    albTitle.style.fontWeight = "800";
+    albTitle.style.color = "#fff";
+    albTitle.textContent = album.name;
+
+    const albArtist = document.createElement("div");
+    albArtist.style.fontSize = "0.95rem";
+    albArtist.style.color = "var(--fg-muted)";
+    albArtist.textContent = album.artist;
+
+    const trackCount = document.createElement("div");
+    trackCount.style.fontSize = "0.8rem";
+    trackCount.style.color = "var(--accent)";
+    trackCount.style.fontWeight = "600";
+    trackCount.textContent = `${album.tracks.length} track${album.tracks.length === 1 ? "" : "s"}`;
+
+    info.appendChild(albTitle);
+    info.appendChild(albArtist);
+    info.appendChild(trackCount);
+
+    const closeBtn = document.createElement("button");
+    closeBtn.textContent = "✕";
+    closeBtn.style.position = "absolute";
+    closeBtn.style.top = "0";
+    closeBtn.style.right = "0";
+    closeBtn.style.background = "transparent";
+    closeBtn.style.border = "none";
+    closeBtn.style.color = "var(--fg-muted)";
+    closeBtn.style.fontSize = "1.3rem";
+    closeBtn.style.cursor = "pointer";
+    closeBtn.addEventListener("click", () => modal.remove());
+
+    header.appendChild(img);
+    header.appendChild(info);
+    header.appendChild(closeBtn);
+    content.appendChild(header);
+
+    const tableWrapper = document.createElement("div");
+    tableWrapper.style.border = "1px solid rgba(255,255,255,0.06)";
+    tableWrapper.style.borderRadius = "8px";
+    tableWrapper.style.overflow = "hidden";
+
+    const table = document.createElement("table");
+    table.style.width = "100%";
+    table.style.borderCollapse = "collapse";
+    table.style.fontSize = "0.82rem";
+    table.style.fontFamily = "monospace";
+    table.style.textAlign = "left";
+
+    const thead = document.createElement("thead");
+    thead.innerHTML = `
+        <tr style="background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.08); color: var(--fg-muted); font-size: 0.72rem; text-transform: uppercase;">
+            <th style="padding: 10px; width: 8%; text-align: center;">#</th>
+            <th style="padding: 10px; width: 44%;">TITLE</th>
+            <th style="padding: 10px; width: 22%;">ARTIST</th>
+            <th style="padding: 10px; width: 14%;">STATUS</th>
+            <th style="padding: 10px; width: 12%; text-align: center;">ACTION</th>
+        </tr>
+    `;
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    album.tracks.forEach((track) => {
+        const tr = document.createElement("tr");
+        tr.dataset.filename = track.filename;
+        tr.style.borderBottom = "1px solid rgba(255,255,255,0.04)";
+        tr.style.transition = "background 0.2s";
+        tr.addEventListener(
+            "mouseenter",
+            () => (tr.style.background = "rgba(255,255,255,0.02)"),
+        );
+        tr.addEventListener(
+            "mouseleave",
+            () => (tr.style.background = "transparent"),
+        );
+
+        const numTd = document.createElement("td");
+        numTd.style.padding = "10px";
+        numTd.style.textAlign = "center";
+        numTd.style.color = "var(--fg-muted)";
+        numTd.textContent = track.track_number || "-";
+
+        const titleTd = document.createElement("td");
+        titleTd.style.padding = "10px";
+        titleTd.style.fontWeight = "600";
+        titleTd.style.color = "#fff";
+        titleTd.textContent = track.title;
+
+        const artistTd = document.createElement("td");
+        artistTd.style.padding = "10px";
+        artistTd.style.color = "var(--fg-muted)";
+        artistTd.textContent = track.artist;
+
+        const statusTd = document.createElement("td");
+        statusTd.style.padding = "10px";
+
+        const statusBadge = document.createElement("span");
+        statusBadge.style.fontSize = "0.68rem";
+        statusBadge.style.padding = "2px 6px";
+        statusBadge.style.borderRadius = "4px";
+        statusBadge.style.fontWeight = "600";
+
+        if (
+            !track.artwork_missing &&
+            !track.artist_missing &&
+            !track.album_missing
+        ) {
+            statusBadge.textContent = "Healthy";
+            statusBadge.style.background = "rgba(29, 185, 84, 0.12)";
+            statusBadge.style.color = "#1db954";
+        } else {
+            statusBadge.textContent = "Unfixed";
+            statusBadge.style.background = "rgba(255, 176, 0, 0.12)";
+            statusBadge.style.color = "#ffb000";
+        }
+        statusTd.appendChild(statusBadge);
+
+        const actionTd = document.createElement("td");
+        actionTd.style.padding = "10px";
+        actionTd.style.textAlign = "center";
+
+        const fixBtn = document.createElement("button");
+        const activeFixStatus = activeFixes.get(track.filename);
+        if (activeFixStatus) {
+            fixBtn.disabled = true;
+            fixBtn.innerHTML = `<span class="inline-spinner" style="display:inline-block; width:10px; height:10px; border:2px solid rgba(255,255,255,0.2); border-top-color:#fff; border-radius:50%; animation:spin 1s linear infinite; margin-right:5px;"></span> ${activeFixStatus}`;
+        } else {
+            fixBtn.textContent = "Fix";
+        }
+        fixBtn.style.background = "rgba(255, 255, 255, 0.05)";
+        fixBtn.style.border = "1px solid rgba(255, 255, 255, 0.15)";
+        fixBtn.style.color = "#fff";
+        fixBtn.style.borderRadius = "4px";
+        fixBtn.style.padding = "2px 8px";
+        fixBtn.style.cursor = "pointer";
+        fixBtn.style.fontSize = "0.75rem";
+        fixBtn.addEventListener("click", () => {
+            modal.remove();
+            openFixMetadataModal(track);
+        });
+
+        actionTd.appendChild(fixBtn);
+
+        tr.appendChild(numTd);
+        tr.appendChild(titleTd);
+        tr.appendChild(artistTd);
+        tr.appendChild(statusTd);
+        tr.appendChild(actionTd);
+        tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    tableWrapper.appendChild(table);
+    content.appendChild(tableWrapper);
+
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+function initIphoneViewEvents() {
+    const btnSongs = document.getElementById("iphone-tab-songs");
+    const btnArtists = document.getElementById("iphone-tab-artists");
+    const btnAlbums = document.getElementById("iphone-tab-albums");
+    const btnList = document.getElementById("iphone-view-list");
+    const btnGrid = document.getElementById("iphone-view-grid");
+    const searchInput = document.getElementById("iphone-search");
+
+    if (btnSongs) {
+        btnSongs.addEventListener("click", () => {
+            iphoneActiveTab = "songs";
+            btnSongs.style.background = "rgba(29, 185, 84, 0.1)";
+            btnSongs.style.borderColor = "var(--accent)";
+            btnSongs.style.color = "var(--accent)";
+
+            if (btnArtists) {
+                btnArtists.style.background = "transparent";
+                btnArtists.style.borderColor = "rgba(255,255,255,0.1)";
+                btnArtists.style.color = "var(--fg-muted)";
+            }
+            if (btnAlbums) {
+                btnAlbums.style.background = "transparent";
+                btnAlbums.style.borderColor = "rgba(255,255,255,0.1)";
+                btnAlbums.style.color = "var(--fg-muted)";
+            }
+            renderIphoneView();
+        });
+    }
+
+    if (btnArtists) {
+        btnArtists.addEventListener("click", () => {
+            iphoneActiveTab = "artists";
+            btnArtists.style.background = "rgba(29, 185, 84, 0.1)";
+            btnArtists.style.borderColor = "var(--accent)";
+            btnArtists.style.color = "var(--accent)";
+
+            if (btnSongs) {
+                btnSongs.style.background = "transparent";
+                btnSongs.style.borderColor = "rgba(255,255,255,0.1)";
+                btnSongs.style.color = "var(--fg-muted)";
+            }
+            if (btnAlbums) {
+                btnAlbums.style.background = "transparent";
+                btnAlbums.style.borderColor = "rgba(255,255,255,0.1)";
+                btnAlbums.style.color = "var(--fg-muted)";
+            }
+            renderIphoneView();
+        });
+    }
+
+    if (btnAlbums) {
+        btnAlbums.addEventListener("click", () => {
+            iphoneActiveTab = "albums";
+            btnAlbums.style.background = "rgba(29, 185, 84, 0.1)";
+            btnAlbums.style.borderColor = "var(--accent)";
+            btnAlbums.style.color = "var(--accent)";
+
+            if (btnSongs) {
+                btnSongs.style.background = "transparent";
+                btnSongs.style.borderColor = "rgba(255,255,255,0.1)";
+                btnSongs.style.color = "var(--fg-muted)";
+            }
+            if (btnArtists) {
+                btnArtists.style.background = "transparent";
+                btnArtists.style.borderColor = "rgba(255,255,255,0.1)";
+                btnArtists.style.color = "var(--fg-muted)";
+            }
+            renderIphoneView();
+        });
+    }
+
+    if (btnList) {
+        btnList.addEventListener("click", () => {
+            iphoneViewMode = "list";
+            btnList.style.background = "rgba(29, 185, 84, 0.15)";
+            btnList.style.color = "var(--accent)";
+            if (btnGrid) {
+                btnGrid.style.background = "transparent";
+                btnGrid.style.color = "var(--fg-muted)";
+            }
+            renderIphoneView();
+        });
+    }
+
+    if (btnGrid) {
+        btnGrid.addEventListener("click", () => {
+            iphoneViewMode = "grid";
+            btnGrid.style.background = "rgba(29, 185, 84, 0.15)";
+            btnGrid.style.color = "var(--accent)";
+            if (btnList) {
+                btnList.style.background = "transparent";
+                btnList.style.color = "var(--fg-muted)";
+            }
+            renderIphoneView();
+        });
+    }
+
+    if (searchInput) {
+        searchInput.addEventListener("input", (e) => {
+            iphoneSearchQuery = e.target.value;
+            renderIphoneView();
+        });
+    }
+
+    const btnFixAll = document.getElementById("iphone-btn-fix-all");
+    if (btnFixAll) {
+        btnFixAll.addEventListener("click", batchFixIphoneMetadata);
+    }
+}
+
+async function batchFixIphoneMetadata() {
+    if (!vlcConnectedIp) {
+        showModal(
+            "VLC Connection Required",
+            "<p>Please connect to your iOS device first using the 'Connect VLC' dropdown at the top of the app.</p>",
+        );
+        return;
+    }
+
+    const unhealthy = vlcTracks.filter(
+        (t) =>
+            t.artwork_missing ||
+            t.artist_missing ||
+            t.album_missing ||
+            t.track_number === 1 ||
+            !t.track_number,
+    );
+    if (!unhealthy.length) {
+        showModal(
+            "All Tracks Healthy",
+            "<p>All tracks on your iPhone are already healthy with verified metadata and artwork!</p>",
+        );
+        return;
+    }
+
+    showModal(
+        "Fix iPhone Metadata",
+        `<p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500;">Do you want to fix metadata tags for ${unhealthy.length} unhealthy tracks on your iPhone?</p>
+         <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">This will search Spotify for official metadata, write proper tags (artwork, track numbers, albums) to the files, and re-sync them back to your iPhone. This might take a few moments.</p>`,
+        async () => {
+            const confirmBtn = document.getElementById("modal-confirm-btn");
+            const cancelBtn = document.getElementById("modal-cancel-btn");
+            if (confirmBtn) confirmBtn.style.display = "none";
+            if (cancelBtn) cancelBtn.style.display = "none";
+
+            const bodyEl = document.getElementById("modal-body");
+            bodyEl.innerHTML = `
+                <p style="margin-bottom: 12px; font-weight: 500;">Fixing iPhone metadata...</p>
+                <div style="width: 100%; height: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: 5px; overflow: hidden; margin-bottom: 8px;">
+                    <div id="iphone-fix-progress-bar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.2s ease;"></div>
+                </div>
+                <p id="iphone-fix-progress-text" style="font-size: 0.85rem; color: var(--fg-muted); font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Starting...</p>
+            `;
+
+            setBuffering(true);
+            statusBar.textContent = `Batch fixing metadata for ${unhealthy.length} tracks on iPhone...`;
+
+            let successCount = 0;
+            for (let i = 0; i < unhealthy.length; i++) {
+                const track = unhealthy[i];
+                const filename = track.filename;
+                const percent = Math.round((i / unhealthy.length) * 100);
+
+                const bar = document.getElementById("iphone-fix-progress-bar");
+                const txt = document.getElementById("iphone-fix-progress-text");
+                if (bar) bar.style.width = `${percent}%`;
+                if (txt)
+                    txt.textContent = `[${i + 1}/${unhealthy.length}] ${filename}`;
+
+                activeFixes.set(filename, "Searching...");
+                updateFixProgressInDOM(filename, "Searching...");
+
+                try {
+                    const cleaned = cleanMetaSearch(track.title, track.artist);
+                    const queryClean =
+                        `${cleaned.title} ${cleaned.artist}`.trim();
+                    let jsonStr = await invoke("spotify_search", {
+                        query: queryClean,
+                    });
+                    let data = JSON.parse(jsonStr);
+                    let results = data.tracks || [];
+
+                    if (results.length === 0) {
+                        const queryRaw =
+                            `${track.title} ${track.artist}`.trim();
+                        if (queryRaw && queryRaw !== queryClean) {
+                            jsonStr = await invoke("spotify_search", {
+                                query: queryRaw,
+                            });
+                            data = JSON.parse(jsonStr);
+                            results = data.tracks || [];
+                        }
+                    }
+
+                    if (results.length > 0) {
+                        const match = results[0];
+
+                        activeFixes.set(filename, "Tagging...");
+                        updateFixProgressInDOM(filename, "Tagging...");
+
+                        await invoke("vlc_fix_track_metadata", {
+                            ip: vlcConnectedIp,
+                            filename: filename,
+                            title: match.title,
+                            artist: match.artist,
+                            album: match.album,
+                            trackNumber: match.track_number || 1,
+                            coverUrl: match.image || null,
+                        });
+                        successCount++;
+                    }
+
+                    activeFixes.delete(filename);
+                    updateFixProgressInDOM(filename, "complete");
+                } catch (err) {
+                    console.error(`Batch fix failed for ${filename}:`, err);
+                    activeFixes.delete(filename);
+                    updateFixProgressInDOM(filename, "complete");
+                }
+            }
+
+            const bar = document.getElementById("iphone-fix-progress-bar");
+            if (bar) bar.style.width = "100%";
+
+            statusBar.textContent = `Finished fixing iPhone tracks. Successfully fixed ${successCount}/${unhealthy.length}.`;
+            bodyEl.innerHTML = `
+                <p style="margin-bottom: 0.5rem; font-size: 1.05rem; font-weight: 500; color: var(--accent);">Batch iPhone Fix Complete!</p>
+                <p style="color: var(--fg-muted); font-size: 0.92rem; line-height: 1.45;">Successfully fixed metadata tags for <strong>${successCount}</strong> out of <strong>${unhealthy.length}</strong> targeted tracks on your iPhone.</p>
+            `;
+
+            setBuffering(false);
+            if (confirmBtn) {
+                confirmBtn.textContent = "Close";
+                confirmBtn.style.display = "";
+            }
+
+            checkVlcConnection();
+        },
+        "Fix iPhone Tracks",
+    );
 }

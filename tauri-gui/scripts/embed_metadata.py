@@ -4,11 +4,14 @@ import json
 import sys
 from pathlib import Path
 
+# Add scripts directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
+
 import urllib.parse
 
 import requests
 import mutagen
-from mutagen.id3 import APIC, TALB, TCON, TIT2, TPE1, COMM
+from mutagen.id3 import APIC, TALB, TCON, TIT2, TPE1, COMM, TRCK
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4, MP4Cover
 
@@ -56,7 +59,11 @@ def embed(path: str, meta: dict) -> None:
 
     title = meta.get("title") or ""
     artist = meta.get("artist") or ""
-    album = meta.get("album") or ""
+
+    # Import metadata_utils locally to avoid import loop and clean album name
+    import metadata_utils
+
+    album = metadata_utils.clean_album_name(meta.get("album") or "", artist, title)
     tag_list = meta.get("tags") or []
     wiki = meta.get("wiki_summary")
 
@@ -80,9 +87,16 @@ def embed(path: str, meta: dict) -> None:
             resp.raise_for_status()
             cover_data = resp.content
         except Exception as e:
-            print(f"Warning: Failed to fetch cover art from {cover_url}: {e}", file=sys.stderr)
+            print(
+                f"Warning: Failed to fetch cover art from {cover_url}: {e}",
+                file=sys.stderr,
+            )
 
     class_name = audio.__class__.__name__
+    is_png = cover_data.startswith(b"\x89PNG") if cover_data else False
+
+    track_num = meta.get("track_number")
+    track_total = meta.get("track_total")
 
     if class_name == "MP3":
         if audio.tags is None:
@@ -104,9 +118,15 @@ def embed(path: str, meta: dict) -> None:
         if wiki:
             tags.delall("COMM")
             tags.add(COMM(encoding=3, lang="eng", desc="desc", text=wiki[:500]))
+        if track_num is not None:
+            track_str = str(track_num)
+            if track_total is not None:
+                track_str = f"{track_str}/{track_total}"
+            tags.delall("TRCK")
+            tags.add(TRCK(encoding=3, text=track_str))
         if cover_data:
             tags.delall("APIC")
-            mime = "image/png" if "png" in cover_url.lower() else "image/jpeg"
+            mime = "image/png" if is_png else "image/jpeg"
             tags.add(
                 APIC(
                     encoding=3,
@@ -129,8 +149,12 @@ def embed(path: str, meta: dict) -> None:
             audio["\xa9gen"] = [genre_str]
         if wiki:
             audio["\xa9cmt"] = [wiki[:500]]
+        if track_num is not None:
+            total_val = track_total if track_total is not None else 0
+            audio["trkn"] = [(int(track_num), int(total_val))]
+        audio["stik"] = [1]
         if cover_data:
-            img_format = MP4Cover.FORMAT_PNG if "png" in cover_url.lower() else MP4Cover.FORMAT_JPEG
+            img_format = MP4Cover.FORMAT_PNG if is_png else MP4Cover.FORMAT_JPEG
             audio["covr"] = [MP4Cover(cover_data, imageformat=img_format)]
 
     elif class_name == "FLAC":
@@ -145,12 +169,18 @@ def embed(path: str, meta: dict) -> None:
             audio["genre"] = [genre_str]
         if wiki:
             audio["comment"] = [wiki[:500]]
+        if track_num is not None:
+            audio["tracknumber"] = [str(track_num)]
+            if track_total is not None:
+                audio["tracktotal"] = [str(track_total)]
+                audio["totaltracks"] = [str(track_total)]
         if cover_data:
             from mutagen.picture import Picture
+
             pic = Picture()
             pic.data = cover_data
             pic.type = 3
-            pic.mime = "image/png" if "png" in cover_url.lower() else "image/jpeg"
+            pic.mime = "image/png" if is_png else "image/jpeg"
             audio.clear_pictures()
             audio.add_picture(pic)
 
@@ -159,8 +189,13 @@ def embed(path: str, meta: dict) -> None:
             audio["title"] = [title]
             audio["artist"] = [artist]
             audio["album"] = [album]
+            if track_num is not None:
+                audio["tracknumber"] = [str(track_num)]
         except Exception as e:
-            print(f"Warning: Could not set metadata for unsupported format {class_name}: {e}", file=sys.stderr)
+            print(
+                f"Warning: Could not set metadata for unsupported format {class_name}: {e}",
+                file=sys.stderr,
+            )
 
     audio.save()
 

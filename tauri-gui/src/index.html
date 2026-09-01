@@ -18,7 +18,7 @@
     <header id="custom-titlebar">
         <div class="titlebar-left">
             <span class="titlebar-brand">spoti-tauri</span>
-            <span class="titlebar-title">SpotDL GUI v0.3.5</span>
+            <span class="titlebar-title">SpotDL GUI v0.3.6</span>
         </div>
         <div class="titlebar-actions">
             <button type="button" id="btn-update-available" class="titlebar-btn-update"
@@ -44,6 +44,10 @@
                 <a href="#" id="nav-home" class="active">Home</a>
                 <a href="#" id="nav-search">Search</a>
                 <a href="#" id="nav-plugins">Plugin Store</a>
+                <hr id="nav-iphone-sep" style="border: none; border-top: 1px solid rgba(255, 255, 255, 0.08); margin: 8px 12px; display: none;" />
+                <a href="#" id="nav-iphone" style="display: none; align-items: center; gap: 8px;">
+                    On My iPhone
+                </a>
             </nav>
             <div class="playlists-section">
                 <h3>Playlists</h3>
@@ -87,8 +91,93 @@
                             Top 100 Charts
                         </button>
                     </div>
-                    <button type="button" id="nav-profile-btn" class="profile-header-btn" style="
+                    <div id="vlc-sync-container" style="
                                 margin-left: auto;
+                                display: flex;
+                                flex-direction: column;
+                                gap: 2px;
+                                background: rgba(255, 255, 255, 0.03);
+                                border: 1px solid rgba(255, 255, 255, 0.08);
+                                padding: 6px 14px;
+                                border-radius: 16px;
+                                font-family: monospace;
+                                font-size: 0.78rem;
+                                transition: all 0.3s ease;
+                                min-width: 180px;
+                            ">
+                        <div style="display: flex; align-items: center; gap: 8px; justify-content: space-between; width: 100%;">
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <span id="vlc-status-dot" style="
+                                            width: 8px;
+                                            height: 8px;
+                                            border-radius: 50%;
+                                            background: #777;
+                                            display: inline-block;
+                                            box-shadow: 0 0 6px rgba(119, 119, 119, 0.4);
+                                            transition: all 0.3s ease;
+                                        "></span>
+                                <select id="vlc-device-select" style="
+                                            background: transparent;
+                                            border: none;
+                                            color: var(--fg);
+                                            outline: none;
+                                            font-family: inherit;
+                                            font-size: inherit;
+                                            cursor: pointer;
+                                            max-width: 120px;
+                                            font-weight: 600;
+                                        ">
+                                    <option value="" style="background: var(--bg-card); color: var(--fg);">Connect VLC...</option>
+                                    <option value="custom" style="background: var(--bg-card); color: var(--fg);">+ Custom IP</option>
+                                </select>
+                            </div>
+                            <div style="display: flex; align-items: center; gap: 4px;">
+                                <button type="button" id="btn-vlc-refresh" style="
+                                            background: transparent;
+                                            border: none;
+                                            color: var(--fg-muted);
+                                            cursor: pointer;
+                                            font-size: 0.8rem;
+                                            padding: 2px;
+                                            display: flex;
+                                            align-items: center;
+                                            justify-content: center;
+                                            transition: all 0.2s;
+                                        " title="Scan Wi-Fi for VLC iOS Devices">
+                                    🔄
+                                </button>
+                                <button type="button" id="btn-vlc-help" style="
+                                            background: transparent;
+                                            border: none;
+                                            color: var(--fg-muted);
+                                            cursor: pointer;
+                                            font-size: 0.8rem;
+                                            padding: 2px;
+                                            display: flex;
+                                            align-items: center;
+                                            justify-content: center;
+                                            transition: all 0.2s;
+                                        " title="Sync Guide & Help">
+                                    ❓
+                                </button>
+                            </div>
+                        </div>
+                        <div id="vlc-status-message" style="
+                                    font-size: 0.68rem;
+                                    color: var(--fg-muted);
+                                    text-overflow: ellipsis;
+                                    overflow: hidden;
+                                    white-space: nowrap;
+                                    max-width: 200px;
+                                    display: none;
+                                    margin-top: 2px;
+                                    border-top: 1px dashed rgba(255,255,255,0.06);
+                                    padding-top: 2px;
+                                    cursor: pointer;
+                                " title="Click to see details">VLC Offline</div>
+                    </div>
+                    <button type="button" id="nav-profile-btn" class="profile-header-btn" style="
+                                margin-left: 0;
                                 display: flex;
                                 align-items: center;
                                 gap: 8px;
@@ -522,16 +611,13 @@
                                         color: var(--fg);
                                         font-size: 1.1rem;
                                     ">
-                                Custom API Credentials (Optional Fallback)
+                                Custom Last.fm Credentials (Optional Fallback)
                             </h3>
                             <p class="settings-hint" style="margin-bottom: 1.2rem">
-                                If the built-in default keys ever hit
-                                rate-limits or fail, you can generate and
-                                input your own developer credentials below
-                                to bypass the shared limits.
+                                You can optionally generate and input your own developer Last.fm credentials below to avoid rate-limits or bypass shared limits.
                             </p>
 
-                            <div class="settings-row">
+                            <div class="settings-row" style="display: none;">
                                 <label for="spotify-id-input">
                                     Spotify Client ID
                                     <a href="https://developer.spotify.com/dashboard" target="_blank"
@@ -549,7 +635,7 @@
                                         Spotify Client ID & Secret</a>
                                 </p>
                             </div>
-                            <div class="settings-row">
+                            <div class="settings-row" style="display: none;">
                                 <label for="spotify-secret-input">
                                     Spotify Client Secret
                                     <a href="https://developer.spotify.com/dashboard" target="_blank"
@@ -875,6 +961,165 @@
                     </div>
                 </div>
 
+                <!-- View: On My iPhone (VLC Synced Library) -->
+                <div id="view-iphone" class="view hidden" style="padding: 24px 30px">
+                    <div style="margin-bottom: 2rem">
+                        <h2 style="
+                                    font-size: 2rem;
+                                    font-weight: 800;
+                                    background: linear-gradient(135deg, #1db954, #00d2ff);
+                                    -webkit-background-clip: text;
+                                    -webkit-text-fill-color: transparent;
+                                    margin: 0;
+                                    display: flex;
+                                    align-items: center;
+                                    gap: 12px;
+                                ">
+                            On My iPhone
+                        </h2>
+                        <p style="color: var(--fg-muted); font-size: 0.95rem; margin-top: 4px;">
+                            Browse, search, and verify track metadata for files synced directly to your VLC Mobile app over Wi-Fi.
+                        </p>
+                    </div>
+
+                    <!-- Stats Card Summary -->
+                    <div style="
+                                display: grid;
+                                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                                gap: 16px;
+                                margin-bottom: 24px;
+                            ">
+                        <div style="
+                                    background: rgba(255, 255, 255, 0.03);
+                                    border: 1px solid rgba(255, 255, 255, 0.06);
+                                    padding: 16px;
+                                    border-radius: 12px;
+                                    display: flex;
+                                    flex-direction: column;
+                                    gap: 6px;
+                                ">
+                            <span style="font-size: 0.75rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 1px;">Library Status</span>
+                            <span style="font-size: 1.25rem; font-weight: 700; color: #1db954;">Connected</span>
+                            <span id="iphone-stats-ip" style="font-size: 0.8rem; color: var(--fg-muted); font-family: monospace;">IP: 192.168.1.5</span>
+                        </div>
+                        <div style="
+                                    background: rgba(255, 255, 255, 0.03);
+                                    border: 1px solid rgba(255, 255, 255, 0.06);
+                                    padding: 16px;
+                                    border-radius: 12px;
+                                    display: flex;
+                                    flex-direction: column;
+                                    gap: 6px;
+                                ">
+                            <span style="font-size: 0.75rem; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 1px;">Total Songs</span>
+                            <span id="iphone-stats-count" style="font-size: 1.25rem; font-weight: 700; color: #fff;">0 tracks</span>
+                            <span style="font-size: 0.8rem; color: var(--fg-muted);">Available in VLC library</span>
+                        </div>
+                    </div>
+
+                    <!-- Inner View Navigation (Sub-Tabs for Songs / Artists + View Modes) -->
+                    <div style="
+                                display: flex;
+                                gap: 12px;
+                                border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+                                padding-bottom: 8px;
+                                margin-bottom: 20px;
+                                align-items: center;
+                            ">
+                        <button type="button" id="iphone-tab-songs" class="filter-chip active" style="padding: 6px 16px; font-weight: 600; cursor: pointer; background: rgba(29, 185, 84, 0.1); border: 1px solid var(--accent); color: var(--accent); border-radius: 16px; outline: none;">
+                            Songs
+                        </button>
+                        <button type="button" id="iphone-tab-artists" class="filter-chip" style="padding: 6px 16px; font-weight: 600; cursor: pointer; background: transparent; border: 1px solid rgba(255,255,255,0.1); color: var(--fg-muted); border-radius: 16px; margin-left: 4px; outline: none;">
+                            Artists
+                        </button>
+                        <button type="button" id="iphone-tab-albums" class="filter-chip" style="padding: 6px 16px; font-weight: 600; cursor: pointer; background: transparent; border: 1px solid rgba(255,255,255,0.1); color: var(--fg-muted); border-radius: 16px; margin-left: 4px; outline: none;">
+                            Albums
+                        </button>
+
+                        <!-- View modes switcher (List/Grid) -->
+                        <div id="iphone-view-mode-selector" style="display: flex; gap: 4px; margin-left: 16px; align-items: center; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 20px; padding: 2px; background: rgba(0,0,0,0.2);">
+                            <button type="button" id="iphone-view-list" style="background: rgba(29, 185, 84, 0.15); border: none; outline: none; border-radius: 16px; padding: 4px 12px; cursor: pointer; color: var(--accent); font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; gap: 4px; transition: all 0.2s;">
+                                ☰ List
+                            </button>
+                            <button type="button" id="iphone-view-grid" style="background: transparent; border: none; outline: none; border-radius: 16px; padding: 4px 12px; cursor: pointer; color: var(--fg-muted); font-size: 0.78rem; font-weight: 700; display: flex; align-items: center; gap: 4px; transition: all 0.2s;">
+                                ⚃ Grid
+                            </button>
+                        </div>
+
+                        <button type="button" id="iphone-btn-fix-all" class="btn-primary" style="padding: 6px 14px; font-weight: 600; border-radius: 16px; margin-left: 12px; cursor: pointer; font-size: 0.78rem; display: flex; align-items: center; gap: 6px;">
+                            🔧 Fix All Metadata
+                        </button>
+
+                        <input type="text" id="iphone-search" placeholder="Search iPhone tracks..." style="
+                                    margin-left: auto;
+                                    background: rgba(255, 255, 255, 0.05);
+                                    border: 1px solid rgba(255, 255, 255, 0.1);
+                                    border-radius: 20px;
+                                    padding: 6px 16px;
+                                    color: #fff;
+                                    font-size: 0.82rem;
+                                    outline: none;
+                                    width: 220px;
+                                    transition: all 0.2s;
+                                " />
+                    </div>
+
+                    <!-- Tab Content: Songs List -->
+                    <div id="iphone-songs-container" class="iphone-tab-view">
+                        <!-- List View Wrapper -->
+                        <div id="iphone-songs-list-view">
+                            <table style="width: 100%; border-collapse: collapse; text-align: left; font-family: monospace; font-size: 0.85rem;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid rgba(255,255,255,0.1); color: var(--fg-muted); text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.5px;">
+                                        <th style="padding: 10px; font-weight: 600; width: 6%; text-align: center;">ART</th>
+                                        <th style="padding: 10px; font-weight: 600; width: 26%;">TITLE</th>
+                                        <th style="padding: 10px; font-weight: 600; width: 20%;">ARTIST</th>
+                                        <th style="padding: 10px; font-weight: 600; width: 18%;">ALBUM</th>
+                                        <th style="padding: 10px; font-weight: 600; width: 16%; text-align: right;">METADATA STATUS</th>
+                                        <th style="padding: 10px; font-weight: 600; width: 14%; text-align: center;">ACTIONS</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="iphone-songs-body">
+                                    <!-- Populated dynamically by JS -->
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <!-- Grid View Wrapper -->
+                        <div id="iphone-songs-grid-view" class="hidden">
+                            <div id="iphone-songs-grid" style="
+                                        display: grid;
+                                        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                                        gap: 20px;
+                                    ">
+                                <!-- Populated dynamically by JS -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab Content: Artists List -->
+                    <div id="iphone-artists-container" class="iphone-tab-view hidden">
+                        <div id="iphone-artists-grid" style="
+                                    display: grid;
+                                    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                                    gap: 16px;
+                                ">
+                            <!-- Populated dynamically by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Tab Content: Albums List -->
+                    <div id="iphone-albums-container" class="iphone-tab-view hidden">
+                        <div id="iphone-albums-grid" style="
+                                    display: grid;
+                                    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                                    gap: 20px;
+                                ">
+                            <!-- Populated dynamically by JS -->
+                        </div>
+                    </div>
+                </div>
+
                 <!-- View: Plugins (Plugin Store) -->
                 <div id="view-plugins" class="view hidden" style="padding: 24px 30px">
                     <div class="plugins-header" style="margin-bottom: 2rem">
@@ -1155,6 +1400,9 @@
                                 <h3 class="downloads-section-title">
                                     Saved Library
                                 </h3>
+                                <button type="button" id="btn-fix-metadata" class="btn-secondary">
+                                    Fix Metadata
+                                </button>
                                 <button type="button" id="btn-delete-all-downloads"
                                     class="btn-secondary btn-danger-outline">
                                     Delete all Downloads
@@ -1423,9 +1671,19 @@
                 <li id="cm-remove-from-playlist" class="hidden">
                     Remove from this playlist
                 </li>
-                <li id="cm-download">Download</li>
-                <li id="cm-download-group" class="hidden">
-                    Download Group
+                <li id="cm-download" class="has-submenu">
+                    Download <span class="submenu-arrow">▶</span>
+                    <ul class="submenu">
+                        <li id="cm-download-local">Download Locally</li>
+                        <li id="cm-download-iphone">Download to iPhone</li>
+                    </ul>
+                </li>
+                <li id="cm-download-group" class="has-submenu hidden">
+                    <span id="cm-download-group-text">Download Group</span> <span class="submenu-arrow">▶</span>
+                    <ul class="submenu">
+                        <li id="cm-download-group-local">Download Locally</li>
+                        <li id="cm-download-group-iphone">Download to iPhone</li>
+                    </ul>
                 </li>
                 <li id="cm-artist">View Artist</li>
                 <li id="cm-rename-playlist" class="hidden">Rename Playlist</li>
@@ -1900,6 +2158,32 @@
                         <p>Select a card from the collection to reveal your fate.</p>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- iOS VLC Wi-Fi Sync Help Modal -->
+    <div id="vlc-help-modal" class="custom-dialog-overlay hidden" style="z-index: 20000; position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.7); backdrop-filter: blur(8px);">
+        <div class="custom-dialog-card" style="max-width: 500px; width: 90%; background: rgba(18, 18, 18, 0.85); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 25px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); font-family: monospace; color: var(--fg);">
+            <div class="custom-dialog-header" style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px; margin-bottom: 18px;">
+                <span class="custom-dialog-brand" style="color: var(--accent); font-weight: bold; font-size: 1.1rem;">VLC iOS Sync Guide</span>
+                <button type="button" id="vlc-help-close-btn" style="background: transparent; border: none; color: var(--fg-muted); font-size: 1.5rem; cursor: pointer; line-height: 1; padding: 0 5px;">×</button>
+            </div>
+            <div class="custom-dialog-body" style="font-size: 0.85rem; line-height: 1.5; color: var(--fg-muted); margin-bottom: 20px;">
+                <p style="margin-top: 0; color: var(--fg); font-weight: bold;">Sync your downloads directly to your iPhone/iPad:</p>
+                <ol style="padding-left: 20px; margin: 12px 0;">
+                    <li style="margin-bottom: 8px;">Install the free <strong>VLC for Mobile</strong> app from the iOS App Store.</li>
+                    <li style="margin-bottom: 8px;">Open VLC, select the <strong>Network</strong> tab at the bottom, and toggle <strong>Sharing via Wi-Fi</strong> to <strong>ON</strong>.</li>
+                    <li style="margin-bottom: 8px;">Note the IP address displayed under the toggle (e.g. <code>192.168.1.100</code>). Make sure your PC is on the same Wi-Fi.</li>
+                    <li style="margin-bottom: 8px;">Click the dropdown in the top bar of this app, choose <strong>+ Custom IP</strong>, and enter that address.</li>
+                    <li style="margin-bottom: 8px;">Once connected, the status dot turns green. Downloader lists will highlight files already on your phone, and you can upload new songs instantly!</li>
+                </ol>
+                <div style="background: rgba(255,255,255,0.03); border-left: 3px solid var(--accent); padding: 8px 12px; border-radius: 4px; margin-top: 15px; font-size: 0.8rem;">
+                    <strong>Important:</strong> VLC must remain open in the foreground on your device during transfer, otherwise iOS will suspend the network server.
+                </div>
+            </div>
+            <div class="custom-dialog-actions" style="display: flex; justify-content: flex-end;">
+                <button type="button" id="vlc-help-ok-btn" class="custom-dialog-btn primary-btn" style="padding: 8px 20px; border-radius: 6px; cursor: pointer;">Got it</button>
             </div>
         </div>
     </div>

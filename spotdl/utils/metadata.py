@@ -231,6 +231,7 @@ def embed_metadata(
         audio_file[tag_preset["tracknumber"]] = [(song.track_number, song.tracks_count)]
         audio_file[tag_preset["explicit"]] = (4 if song.explicit is True else 2,)
         audio_file[tag_preset["woas"]] = song.url.encode("utf-8")
+        audio_file["stik"] = [1]
     elif encoding == "mp3":
         audio_file["tracknumber"] = f"{str(song.track_number)}/{str(song.tracks_count)}"
         audio_file["discnumber"] = f"{str(song.disc_number)}/{str(song.disc_count)}"
@@ -301,7 +302,9 @@ def embed_cover(audio_file, song: Song, encoding: str):
         picture = Picture()
         picture.type = 3
         picture.desc = "Cover"
-        picture.mime = "image/jpeg"
+        picture.mime = (
+            "image/png" if cover_data.startswith(b"\x89PNG") else "image/jpeg"
+        )
         picture.data = cover_data
 
         if encoding in ["ogg", "opus"]:
@@ -318,18 +321,24 @@ def embed_cover(audio_file, song: Song, encoding: str):
     elif encoding == "m4a":
         if M4A_TAG_PRESET["albumart"] in audio_file.keys():
             audio_file.pop(M4A_TAG_PRESET["albumart"])
+        img_format = (
+            MP4Cover.FORMAT_PNG
+            if cover_data.startswith(b"\x89PNG")
+            else MP4Cover.FORMAT_JPEG
+        )
         audio_file[M4A_TAG_PRESET["albumart"]] = [
             MP4Cover(
                 cover_data,
-                imageformat=MP4Cover.FORMAT_JPEG,
+                imageformat=img_format,
             )
         ]
     elif encoding == "mp3":
         if "APIC:Cover" in audio_file.keys():
             audio_file.pop("APIC:Cover")
+        mime = "image/png" if cover_data.startswith(b"\x89PNG") else "image/jpeg"
         audio_file["APIC"] = APIC(
             encoding=3,
-            mime="image/jpeg",
+            mime=mime,
             type=3,
             desc="Cover",
             data=cover_data,
@@ -601,10 +610,9 @@ def embed_wav_file(output_file: Path, song: Song):
     if song.cover_url:
         try:
             cover_data = requests.get(song.cover_url, timeout=10).content
+            mime = "image/png" if cover_data.startswith(b"\x89PNG") else "image/jpeg"
             audio.tags.add(  # type: ignore
-                APIC(
-                    encoding=3, mime="image/jpeg", type=3, desc="Cover", data=cover_data
-                )
+                APIC(encoding=3, mime=mime, type=3, desc="Cover", data=cover_data)
             )
         except Exception:
             pass

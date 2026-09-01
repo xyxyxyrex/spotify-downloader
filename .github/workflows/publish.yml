@@ -13,10 +13,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: 'npm'
@@ -26,7 +28,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
           cache: 'pip'
@@ -44,28 +46,30 @@ jobs:
         working-directory: tauri-gui
         run: npm ci
 
-      - name: Clean Signing Key
-        shell: bash
+      - name: Validate release version and signing configuration
+        shell: pwsh
         env:
-          RAW_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          if [ -z "$RAW_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is not set in GitHub repository secrets! Tauri updater requires installers to be signed to function."
-            echo "To fix this, generate a Tauri signing key using 'tauri signer generate' and add the private key to repository secrets."
-            exit 1
-          fi
-          CLEAN_KEY=$(echo "$RAW_KEY" | tr -d '\r\n ')
-          if [ -z "$CLEAN_KEY" ]; then
-            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret is empty or invalid after whitespace cleaning!"
-            exit 1
-          fi
-          echo "TAURI_SIGNING_PRIVATE_KEY=$CLEAN_KEY" >> $GITHUB_ENV
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not configured. The updater cannot publish unsigned installers."
+          }
+
+          $packageVersion = node -p "require('./tauri-gui/package.json').version"
+          $tauriVersion = (Get-Content tauri-gui/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $cargoVersion = ((Get-Content tauri-gui/src-tauri/Cargo.toml | Select-String '^version = "([^"]+)"').Matches.Groups[1].Value)
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          if (@($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $tagVersion }) {
+            throw "Release tag v$tagVersion does not match package=$packageVersion, tauri=$tauriVersion, cargo=$cargoVersion"
+          }
 
       - name: Build and Publish Tauri App
-        uses: tauri-apps/tauri-action@v0
+        id: tauri
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: v__VERSION__
           releaseName: 'SpotDL GUI v__VERSION__'
@@ -73,39 +77,33 @@ jobs:
           releaseDraft: false
           prerelease: false
           projectPath: tauri-gui
+          retryAttempts: 2
+          uploadUpdaterJson: true
+          uploadUpdaterSignatures: true
+          updaterJsonPreferNsis: true
 
-      - name: Auto-update updater.json signature
-        shell: bash
+      # Releases through v0.3.5 read the raw updater.json endpoint. Keep it in
+      # sync while newer clients migrate to the release-hosted latest.json.
+      - name: Validate installer signature and sync legacy updater manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION=$(node -p "require('./tauri-gui/package.json').version")
-          echo "Detected App Version: $VERSION"
-          
-          # Find signature file locally in target bundle folder
-          SIG_FILE=$(find tauri-gui/src-tauri/target -name "*.exe.sig" | head -n 1)
-          
-          if [ -f "$SIG_FILE" ]; then
-            SIG_CONTENT=$(cat "$SIG_FILE")
-            echo "Found signature: $SIG_CONTENT"
-            
-            # Update manifest JSON safely
-            node -e "
-              const fs = require('fs');
-              const path = 'updater.json';
-              const manifest = JSON.parse(fs.readFileSync(path, 'utf8'));
-              manifest.version = '$VERSION';
-              manifest.platforms['windows-x86_64'].signature = '$SIG_CONTENT';
-              manifest.platforms['windows-x86_64'].url = 'https://github.com/xyxyxyrex/spotify-downloader/releases/download/v$VERSION/SpotDL.GUI_${VERSION}_x64-setup.exe';
-              fs.writeFileSync(path, JSON.stringify(manifest, null, 2) + '\n');
-            "
-            
-            # Commit and push back to master
-            git config --global user.name "github-actions[bot]"
-            git config --global user.email "github-actions[bot]@users.noreply.github.com"
-            git add updater.json
-            git commit -m "chore: auto-update updater.json signature to v$VERSION [skip ci]"
+          $version = '${{ steps.tauri.outputs.appVersion }}'
+          $manifestDir = Join-Path $env:RUNNER_TEMP 'tauri-release-manifest'
+          New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
+          gh release download "v$version" --pattern latest.json --dir $manifestDir --clobber
+          node tauri-gui/scripts/update_updater_manifest.mjs `
+            (Join-Path $manifestDir 'latest.json') updater.json $version
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updater.json
+          if (git diff --cached --quiet) {
+            Write-Output 'Legacy updater manifest is already current.'
+          } else {
+            git commit -m "chore: update installer manifest to v$version [skip ci]"
+            git fetch origin master
+            git rebase origin/master
             git push origin HEAD:master
-          else
-            echo "::error::No .exe.sig signature file found! Tauri requires setup installer files to be signed for auto-updates to work."
-            echo "Ensure that TAURI_SIGNING_PRIVATE_KEY is a valid private key generated by Tauri."
-            exit 1
-          fi
+          }
