@@ -33,7 +33,7 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests
         timeout-minutes: 10
@@ -74,7 +74,7 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests
         timeout-minutes: 10
@@ -109,7 +109,7 @@ jobs:
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run tests
         timeout-minutes: 10
