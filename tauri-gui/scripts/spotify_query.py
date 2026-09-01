@@ -17,6 +17,21 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 import metadata_utils
 
 
+def _spotdl_path() -> Path:
+    """Match spotDL's config path without importing its heavyweight package root."""
+    if sys.platform.startswith("linux"):
+        xdg_path = Path.home() / ".config" / "spotdl"
+        legacy_path = Path.home() / ".spotdl"
+        if xdg_path.exists() or not legacy_path.exists():
+            xdg_path.mkdir(parents=True, exist_ok=True)
+            return xdg_path
+        return legacy_path
+
+    path = Path.home() / ".spotdl"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def song_to_dict(song) -> dict:
     cleaned_album = metadata_utils.clean_album_name(
         song.album_name or "", song.artist or "", song.name or ""
@@ -481,9 +496,9 @@ def _search_spotify_catalog(spotify, query: str) -> dict:
 
 def _get_direct_spotify_token() -> str:
     import base64
-    import urllib.request
-    import urllib.parse
     import urllib.error
+    import urllib.parse
+    import urllib.request
 
     client_id = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
     client_secret = os.environ.get("SPOTIFY_CLIENT_SECRET", "").strip()
@@ -508,8 +523,8 @@ def _get_direct_spotify_token() -> str:
 
 def _fetch_user_playlists_direct(user_id: str) -> dict:
     """Fetch a user's public playlists using client credentials (no user login)."""
-    import urllib.request
     import urllib.parse
+    import urllib.request
 
     access_token = _get_direct_spotify_token()
 
@@ -542,8 +557,8 @@ def _fetch_user_playlists_direct(user_id: str) -> dict:
 
 def _fetch_playlist_direct(playlist_id: str) -> dict:
     """Fetch playlist metadata and all tracks using direct Spotify Web API."""
-    import urllib.request
     import urllib.parse
+    import urllib.request
 
     access_token = _get_direct_spotify_token()
 
@@ -610,10 +625,9 @@ def _fetch_playlist_direct(playlist_id: str) -> dict:
 
 def check_credentials_cached() -> bool:
     """Return True if credentials are known to be broken (403)."""
-    from spotdl.utils.config import get_spotdl_path
     import time
 
-    status_file = get_spotdl_path() / ".spotify_api_status"
+    status_file = _spotdl_path() / ".spotify_api_status"
     if status_file.exists():
         try:
             with open(status_file, "r") as f:
@@ -628,12 +642,12 @@ def check_credentials_cached() -> bool:
 
 
 def mark_credentials_broken() -> None:
-    from spotdl.utils.config import get_spotdl_path
     import time
 
-    status_file = get_spotdl_path() / ".spotify_api_status"
+    spotdl_path = _spotdl_path()
+    status_file = spotdl_path / ".spotify_api_status"
     try:
-        get_spotdl_path().mkdir(parents=True, exist_ok=True)
+        spotdl_path.mkdir(parents=True, exist_ok=True)
         with open(status_file, "w") as f:
             json.dump({"status": "broken", "timestamp": time.time()}, f)
     except Exception:
@@ -749,9 +763,9 @@ def resolve_query(query: str) -> dict:
     spotify = SpotifyClient()
 
     from spotdl.types.album import Album
+    from spotdl.types.artist import Artist
     from spotdl.types.playlist import Playlist
     from spotdl.types.song import Song
-    from spotdl.types.artist import Artist
     from spotdl.utils.search import get_simple_songs
 
     q = query.strip()
@@ -922,6 +936,14 @@ def main() -> None:
         sys.exit(1)
     try:
         q = sys.argv[1].strip()
+        if q == "__package_self_test__":
+            import yt_dlp  # noqa: F401
+
+            from spotdl.utils.spotify import SpotifyClient  # noqa: F401
+
+            print(json.dumps({"ok": True}))
+            return
+
         # For user: queries, skip spotDL entirely and use direct API
         if q.startswith("user:") or "/user/" in q:
             user_id = (

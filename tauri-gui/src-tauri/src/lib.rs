@@ -675,8 +675,27 @@ fn resolve_spotify_script() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-fn spotify_env_from_settings(_settings: &AppSettings) -> HashMap<String, String> {
+fn spotify_env_from_settings(settings: &AppSettings) -> HashMap<String, String> {
     let mut map = HashMap::new();
+    if let Some(client_id) = settings
+        .spotify_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        map.insert("SPOTIFY_CLIENT_ID".to_string(), client_id.to_string());
+    }
+    if let Some(client_secret) = settings
+        .spotify_client_secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        map.insert(
+            "SPOTIFY_CLIENT_SECRET".to_string(),
+            client_secret.to_string(),
+        );
+    }
     if let Ok(manifest) = env::var("CARGO_MANIFEST_DIR") {
         let repo_root = PathBuf::from(manifest).join("..").join("..").join("..");
         if repo_root.exists() {
