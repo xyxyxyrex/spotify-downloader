@@ -1,11 +1,11 @@
 {
-  "version": "0.3.7",
-  "notes": "Release notes and binaries for version v0.3.7.",
-  "pub_date": "2026-09-01T11:28:17.273Z",
+  "version": "0.3.8",
+  "notes": "Fix Spotify profile playlist imports and improve updater release validation.",
+  "pub_date": "2026-09-03T06:52:54.862Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MG11VUJPT3FWcDJVL2dsU20zODhJNUtpcmFtNE9mY1NzVXAyOXk4cXBBQ21YMWYwYnNKN0lzdXd2bmRabEdrUjB1RktSaHFBRkZrVU9MVGR4and3b3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MjYyMDg1CWZpbGU6U3BvdERMIEdVSV8wLjMuN194NjQtc2V0dXAuZXhlCkFVbmlpdExqc1E4MVdmenBYMEVjMEU5UHkwNkpXYnZ0ZG50YTFNT2VmdkR6OS9aODFRYW9GV3oycHROOXR6bmRxUWJtU2hOWjRKNzRpcFBQWG9WZUNBPT0K",
-      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.7/SpotDL.GUI_0.3.7_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTNklDc1B6aDY1MHJuc2YyTlhhUnk3VnE5dUU2RVJ6Z1JOUmhkdUwwejlGT0dJTWlUbzkySFUvN0pIejZLM29UR3E4QjJQc1ZTZ2pWT0Vad3EyMVMvMmlZelFTZ3RZandJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDE4MzU4CWZpbGU6U3BvdERMIEdVSV8wLjMuOF94NjQtc2V0dXAuZXhlCjBMaEFhbW9XNGZBeW9yK0VSUDhOdkhRTWE2S1BGYTAweVFDZ3NScFY5aVZWR0hmMzJ3ZFFGZDRxYnQrVzZmNnlqZ3dwVkRlR2Q2dVZvdzlUSVIveER3PT0K",
+      "url": "https://github.com/xyxyxyrex/spotify-downloader/releases/download/v0.3.8/SpotDL.GUI_0.3.8_x64-setup.exe"
     }
   }
 }
