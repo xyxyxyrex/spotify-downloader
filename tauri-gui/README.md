@@ -62,6 +62,20 @@ npm run tauri build
 The completed, fully self-contained installers will be output in:
 `tauri-gui/src-tauri/target/release/bundle/`
 
+### Signed Releases and In-App Updates
+
+Production releases are built by `.github/workflows/publish.yml` when a `v*`
+tag is pushed. The workflow requires the repository secret
+`TAURI_SIGNING_PRIVATE_KEY`; `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` is optional
+for an unencrypted updater key. Never commit the private key.
+
+The public updater key is intentionally kept in `src-tauri/tauri.conf.json` so
+existing installations retain the same trust chain. Before tagging a release,
+run `npm run check:release` to verify all package, Cargo, Tauri, capability,
+endpoint, and public-key settings agree. CI signs the NSIS/MSI installers,
+publishes `latest.json`, converts GitHub API asset references to direct public
+downloads, and validates every signature key ID before publishing the manifest.
+
 ---
 
 ## License & Credits

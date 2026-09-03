@@ -1,10 +1,11 @@
 {
     "name": "tauri-gui",
     "private": true,
-    "version": "0.3.7",
+    "version": "0.3.8",
     "type": "module",
     "scripts": {
-        "tauri": "tauri"
+        "tauri": "tauri",
+        "check:release": "node scripts/validate_release_config.mjs"
     },
     "devDependencies": {
         "@tauri-apps/cli": "^2"

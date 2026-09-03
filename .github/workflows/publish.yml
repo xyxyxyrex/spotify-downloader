@@ -5,8 +5,13 @@ on:
     tags:
       - 'v*'
 
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish-tauri:
+    timeout-minutes: 60
     permissions:
       contents: write
     runs-on: windows-latest
@@ -24,6 +29,30 @@ jobs:
           cache: 'npm'
           cache-dependency-path: tauri-gui/package-lock.json
 
+      - name: Validate release metadata and updater public key
+        run: node tauri-gui/scripts/validate_release_config.mjs $env:GITHUB_REF_NAME
+
+      - name: Validate updater signing secret
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not configured. The updater cannot publish unsigned installers."
+          }
+
+          $normalizedSigningKey = $env:TAURI_SIGNING_PRIVATE_KEY -replace '\s', ''
+          try {
+            $decodedSigningKey = [Convert]::FromBase64String($normalizedSigningKey)
+          } catch {
+            throw "TAURI_SIGNING_PRIVATE_KEY is not valid base64 after whitespace normalization."
+          }
+          if ($decodedSigningKey.Length -lt 64) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is unexpectedly short."
+          }
+          Write-Output "::add-mask::$normalizedSigningKey"
+          "TAURI_SIGNING_PRIVATE_KEY=$normalizedSigningKey" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -36,7 +65,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install . pyinstaller
+          python -m pip install . "pyinstaller>=6.11.1,<7" "pytest>=8.3.3,<10"
+
+      - name: Test Spotify profile importer
+        run: python -m pytest tauri-gui/tests -q
 
       - name: Build Frozen Binaries and Download dependencies
         run: |
@@ -46,31 +78,8 @@ jobs:
         working-directory: tauri-gui
         run: npm ci
 
-      - name: Validate release version and signing configuration
-        shell: pwsh
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
-            throw "TAURI_SIGNING_PRIVATE_KEY is not configured. The updater cannot publish unsigned installers."
-          }
-
-          $normalizedSigningKey = $env:TAURI_SIGNING_PRIVATE_KEY -replace '\s', ''
-          try {
-            [void][Convert]::FromBase64String($normalizedSigningKey)
-          } catch {
-            throw "TAURI_SIGNING_PRIVATE_KEY is not valid base64 after whitespace normalization."
-          }
-          Write-Output "::add-mask::$normalizedSigningKey"
-          "TAURI_SIGNING_PRIVATE_KEY=$normalizedSigningKey" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-          $packageVersion = node -p "require('./tauri-gui/package.json').version"
-          $tauriVersion = (Get-Content tauri-gui/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $cargoVersion = ((Get-Content tauri-gui/src-tauri/Cargo.toml | Select-String '^version = "([^"]+)"').Matches.Groups[1].Value)
-          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
-          if (@($packageVersion, $tauriVersion, $cargoVersion) | Where-Object { $_ -ne $tagVersion }) {
-            throw "Release tag v$tagVersion does not match package=$packageVersion, tauri=$tauriVersion, cargo=$cargoVersion"
-          }
+      - name: Check frontend syntax
+        run: node --check tauri-gui/src/main.js
 
       - name: Build and Publish Tauri App
         id: tauri
@@ -82,7 +91,7 @@ jobs:
         with:
           tagName: v__VERSION__
           releaseName: 'SpotDL GUI v__VERSION__'
-          releaseBody: 'Release notes and binaries for version v__VERSION__.'
+          releaseBody: 'Fix Spotify profile playlist imports and improve updater release validation.'
           releaseDraft: false
           prerelease: false
           projectPath: tauri-gui
@@ -93,7 +102,7 @@ jobs:
 
       # Releases through v0.3.5 read the raw updater.json endpoint. Keep it in
       # sync while newer clients migrate to the release-hosted latest.json.
-      - name: Validate installer signature and sync legacy updater manifest
+      - name: Normalize updater URLs and sync legacy updater manifest
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -102,10 +111,17 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           $version = '${{ steps.tauri.outputs.appVersion }}'
           $manifestDir = Join-Path $env:RUNNER_TEMP 'tauri-release-manifest'
-          New-Item -ItemType Directory -Path $manifestDir -Force | Out-Null
-          gh release download "v$version" --pattern latest.json --dir $manifestDir --clobber
+          $downloadDir = Join-Path $manifestDir 'downloaded'
+          $normalizedDir = Join-Path $manifestDir 'normalized'
+          New-Item -ItemType Directory -Path $downloadDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $normalizedDir -Force | Out-Null
+          $downloadedManifest = Join-Path $downloadDir 'latest.json'
+          $normalizedManifest = Join-Path $normalizedDir 'latest.json'
+
+          gh release download "v$version" --pattern latest.json --dir $downloadDir --clobber
           node tauri-gui/scripts/update_updater_manifest.mjs `
-            (Join-Path $manifestDir 'latest.json') updater.json $version
+            $downloadedManifest updater.json $version $normalizedManifest
+          gh release upload "v$version" $normalizedManifest --clobber
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

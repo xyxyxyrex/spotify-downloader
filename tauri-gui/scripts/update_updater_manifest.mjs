@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const [, , sourcePath, targetPath, expectedVersion] = process.argv;
+const [, , sourcePath, targetPath, expectedVersion, normalizedLatestPath] = process.argv;
 
 if (!sourcePath || !targetPath || !expectedVersion) {
     console.error(
-        "Usage: node update_updater_manifest.mjs <latest.json> <updater.json> <version>",
+        "Usage: node update_updater_manifest.mjs <latest.json> <updater.json> <version> [normalized-latest.json]",
     );
     process.exit(2);
 }
@@ -46,90 +46,137 @@ if (latest.version !== expectedVersion) {
     );
 }
 
+const publicText = decodeMinisignText(
+    tauriConfig.plugins?.updater?.pubkey || "",
+    "Updater public key",
+);
+const publicPayload = payloadLine(publicText, "Updater public key").payload;
+const publicKeyId = publicPayload.subarray(2, 10);
+
+async function resolveReleaseAsset(assetUrl) {
+    const url = new URL(assetUrl);
+    let installerName;
+    let downloadUrl;
+    if (url.protocol === "https:" && url.hostname === "github.com") {
+        if (!url.pathname.includes(`/releases/download/v${expectedVersion}/`)) {
+            throw new Error(`Updater URL does not point to release v${expectedVersion}`);
+        }
+        installerName = decodeURIComponent(path.posix.basename(url.pathname));
+        downloadUrl = url.toString();
+    } else if (
+        url.protocol === "https:" &&
+        url.hostname === "api.github.com" &&
+        /^\/repos\/xyxyxyrex\/spotify-downloader\/releases\/assets\/\d+$/.test(
+            url.pathname,
+        )
+    ) {
+        const headers = {
+            Accept: "application/vnd.github+json",
+            "User-Agent": "spotdl-updater-manifest-validator",
+        };
+        if (process.env.GH_TOKEN) {
+            headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
+        }
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+            throw new Error(
+                `Unable to resolve GitHub release asset: HTTP ${response.status}`,
+            );
+        }
+        const asset = await response.json();
+        installerName = asset.name;
+        downloadUrl = asset.browser_download_url;
+        const browserUrl = new URL(downloadUrl);
+        if (
+            browserUrl.protocol !== "https:" ||
+            browserUrl.hostname !== "github.com" ||
+            !browserUrl.pathname.includes(`/releases/download/v${expectedVersion}/`)
+        ) {
+            throw new Error(`Release asset does not belong to v${expectedVersion}`);
+        }
+    } else {
+        throw new Error(`Unexpected updater URL: ${url.origin}${url.pathname}`);
+    }
+    return { installerName, downloadUrl };
+}
+
+const normalizedLatest = structuredClone(latest);
+for (const [platform, artifact] of Object.entries(
+    normalizedLatest.platforms || {},
+)) {
+    if (!artifact?.url || !artifact?.signature) {
+        throw new Error(`Updater entry ${platform} is missing a URL or signature`);
+    }
+
+    const signatureText = decodeMinisignText(
+        artifact.signature,
+        `${platform} updater signature`,
+    );
+    const signature = payloadLine(
+        signatureText,
+        `${platform} updater signature`,
+    );
+    const signatureKeyId = signature.payload.subarray(2, 10);
+    if (!publicKeyId.equals(signatureKeyId)) {
+        throw new Error(
+            `${platform} signature key ID ${signatureKeyId.toString("hex")} does not match public key ${publicKeyId.toString("hex")}`,
+        );
+    }
+
+    const trustedComment = signature.lines.find((line) =>
+        line.startsWith("trusted comment:"),
+    );
+    const signedFile = trustedComment?.match(/\bfile:(.+)$/)?.[1]?.trim();
+    if (!signedFile) {
+        throw new Error(`${platform} signature does not identify its signed file`);
+    }
+
+    const { installerName, downloadUrl } = await resolveReleaseAsset(
+        artifact.url,
+    );
+    if (
+        normalizedInstallerName(signedFile) !==
+        normalizedInstallerName(installerName)
+    ) {
+        throw new Error(
+            `${platform} signature file ${signedFile} does not match ${installerName}`,
+        );
+    }
+    artifact.url = downloadUrl;
+}
+
 const nsis =
-    latest.platforms?.["windows-x86_64-nsis"] ||
-    (latest.platforms?.["windows-x86_64"]?.url?.endsWith("-setup.exe")
-        ? latest.platforms["windows-x86_64"]
+    normalizedLatest.platforms?.["windows-x86_64-nsis"] ||
+    (normalizedLatest.platforms?.["windows-x86_64"]?.url?.endsWith("-setup.exe")
+        ? normalizedLatest.platforms["windows-x86_64"]
         : null);
 if (!nsis?.url || !nsis?.signature) {
     throw new Error("Release manifest does not contain a Windows x64 NSIS updater");
 }
 
-const publicText = decodeMinisignText(
-    tauriConfig.plugins?.updater?.pubkey || "",
-    "Updater public key",
-);
-const signatureText = decodeMinisignText(nsis.signature, "Updater signature");
-const publicPayload = payloadLine(publicText, "Updater public key").payload;
-const signature = payloadLine(signatureText, "Updater signature");
-const publicKeyId = publicPayload.subarray(2, 10);
-const signatureKeyId = signature.payload.subarray(2, 10);
-if (!publicKeyId.equals(signatureKeyId)) {
-    throw new Error(
-        `Signature key ID ${signatureKeyId.toString("hex")} does not match public key ${publicKeyId.toString("hex")}`,
-    );
+const nsisUrl = new URL(nsis.url);
+if (nsisUrl.protocol !== "https:" || nsisUrl.hostname !== "github.com") {
+    throw new Error("Normalized NSIS updater URL is not a public GitHub download");
 }
-
-const trustedComment = signature.lines.find((line) =>
-    line.startsWith("trusted comment:"),
-);
-const signedFile = trustedComment?.match(/\bfile:(.+)$/)?.[1]?.trim();
-if (!signedFile?.endsWith("_x64-setup.exe")) {
-    throw new Error(`Unexpected signed NSIS installer filename: ${signedFile}`);
-}
-
-const url = new URL(nsis.url);
-let installerName;
-let legacyUrl;
-if (url.protocol === "https:" && url.hostname === "github.com") {
-    if (!url.pathname.includes(`/releases/download/v${expectedVersion}/`)) {
-        throw new Error(`Updater URL does not point to release v${expectedVersion}`);
-    }
-    installerName = decodeURIComponent(path.posix.basename(url.pathname));
-    legacyUrl = url.toString();
-} else if (
-    url.protocol === "https:" &&
-    url.hostname === "api.github.com" &&
-    /^\/repos\/xyxyxyrex\/spotify-downloader\/releases\/assets\/\d+$/.test(
-        url.pathname,
-    )
-) {
-    const headers = {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "spotdl-updater-manifest-validator",
-    };
-    if (process.env.GH_TOKEN) {
-        headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
-    }
-    const response = await fetch(url, { headers });
-    if (!response.ok) {
-        throw new Error(`Unable to resolve GitHub release asset: HTTP ${response.status}`);
-    }
-    const asset = await response.json();
-    installerName = asset.name;
-    legacyUrl = asset.browser_download_url;
-    const browserUrl = new URL(legacyUrl);
-    if (
-        browserUrl.protocol !== "https:" ||
-        browserUrl.hostname !== "github.com" ||
-        !browserUrl.pathname.includes(`/releases/download/v${expectedVersion}/`)
-    ) {
-        throw new Error(`Release asset does not belong to v${expectedVersion}`);
-    }
-} else {
-    throw new Error(`Unexpected updater URL: ${url.origin}${url.pathname}`);
-}
-
+const installerName = decodeURIComponent(path.posix.basename(nsisUrl.pathname));
 if (!installerName?.endsWith("_x64-setup.exe")) {
     throw new Error(`Unexpected NSIS installer filename: ${installerName}`);
 }
-if (
-    !signedFile ||
-    normalizedInstallerName(signedFile) !== normalizedInstallerName(installerName)
-) {
-    throw new Error(
-        `Signature file ${signedFile || "<missing>"} does not match ${installerName}`,
+
+if (normalizedLatestPath) {
+    fs.writeFileSync(
+        normalizedLatestPath,
+        `${JSON.stringify(normalizedLatest, null, 2)}\n`,
     );
+}
+
+/*
+ * Releases through v0.3.5 use the repository-level updater.json. Keep its
+ * generic Windows target pointed at the same validated NSIS artifact.
+ */
+const legacyUrl = nsis.url;
+if (!legacyUrl.includes(`/releases/download/v${expectedVersion}/`)) {
+    throw new Error(`Updater URL does not point to release v${expectedVersion}`);
 }
 
 const legacyManifest = {
@@ -146,5 +193,5 @@ const legacyManifest = {
 
 fs.writeFileSync(targetPath, `${JSON.stringify(legacyManifest, null, 2)}\n`);
 console.log(
-    `Validated ${installerName} with updater key ${publicKeyId.toString("hex")} and wrote ${targetPath}`,
+    `Validated ${Object.keys(normalizedLatest.platforms).length} updater entries with key ${publicKeyId.toString("hex")} and wrote ${targetPath}`,
 );

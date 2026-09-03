@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
 
@@ -521,38 +522,132 @@ def _get_direct_spotify_token() -> str:
     return token_data["access_token"]
 
 
-def _fetch_user_playlists_direct(user_id: str) -> dict:
-    """Fetch a user's public playlists using client credentials (no user login)."""
+class _SpotifyProfileParser(HTMLParser):
+    """Extract the public playlist cards rendered on a Spotify profile page."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.page_title = ""
+        self.playlists: list[dict] = []
+        self._in_title = False
+        self._title_complete = False
+        self._playlist_id: Optional[str] = None
+        self._playlist_image = ""
+        self._playlist_text: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, Optional[str]]]) -> None:
+        attributes = dict(attrs)
+        if tag == "title" and not self._title_complete:
+            self._in_title = True
+            return
+
+        if tag == "a" and self._playlist_id is None:
+            href = attributes.get("href") or ""
+            match = re.fullmatch(r"/playlist/([A-Za-z0-9]+)", href)
+            if match:
+                self._playlist_id = match.group(1)
+                self._playlist_image = ""
+                self._playlist_text = []
+            return
+
+        if tag == "img" and self._playlist_id and not self._playlist_image:
+            self._playlist_image = attributes.get("src") or ""
+
+    def handle_data(self, data: str) -> None:
+        text = " ".join(data.split())
+        if not text:
+            return
+        if self._in_title:
+            self.page_title += text
+        if self._playlist_id:
+            self._playlist_text.append(text)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "title":
+            self._in_title = False
+            self._title_complete = True
+            return
+        if tag != "a" or not self._playlist_id:
+            return
+
+        name = self._playlist_text[0] if self._playlist_text else "Untitled playlist"
+        self.playlists.append(
+            {
+                "id": self._playlist_id,
+                "name": name,
+                "url": f"https://open.spotify.com/playlist/{self._playlist_id}",
+                "image": self._playlist_image,
+                # Spotify's public profile page no longer exposes track totals.
+                "tracks_total": None,
+            }
+        )
+        self._playlist_id = None
+        self._playlist_image = ""
+        self._playlist_text = []
+
+
+def _fetch_user_playlists_web(user_id: str) -> dict:
+    """Fetch public playlists from the profile page.
+
+    Spotify removed GET /users/{id}/playlists in February 2026. The public
+    profile page remains available without user OAuth and renders the public
+    playlist cards in its HTML.
+    """
+    import urllib.error
     import urllib.parse
     import urllib.request
 
-    access_token = _get_direct_spotify_token()
+    normalized_user_id = user_id.strip()
+    if not normalized_user_id or not re.fullmatch(
+        r"[A-Za-z0-9._-]+", normalized_user_id
+    ):
+        raise ValueError("Enter a valid Spotify profile URL or username.")
 
-    # Fetch user playlists
-    api_url = f"https://api.spotify.com/v1/users/{urllib.parse.quote(user_id)}/playlists?limit=50"
-    api_req = urllib.request.Request(
-        api_url,
-        headers={"Authorization": f"Bearer {access_token}"},
+    profile_url = (
+        "https://open.spotify.com/user/"
+        f"{urllib.parse.quote(normalized_user_id, safe='')}"
     )
-    with urllib.request.urlopen(api_req) as resp:
-        playlists_data = json.loads(resp.read())
+    request = urllib.request.Request(
+        profile_url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            # A minimal browser UA requests Spotify's server-rendered profile.
+            # A full desktop Chrome UA currently returns only the Web Player shell.
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
 
-    items = playlists_data.get("items", [])
-    return {
-        "type": "user_playlists",
-        "playlists": [
-            {
-                "id": p["id"],
-                "name": p["name"],
-                "url": p["external_urls"]["spotify"],
-                "image": p["images"][0]["url"] if p.get("images") else "",
-                "tracks_total": p["tracks"]["total"] if "tracks" in p else 0,
-                "owner": (p["owner"].get("display_name") or p["owner"]["id"]),
-            }
-            for p in items
-            if p and p.get("public") is not False
-        ],
-    }
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            html = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise ValueError(
+                "Spotify user profile not found. Check the profile URL and try again."
+            ) from exc
+        raise ValueError(f"Spotify profile request failed (HTTP {exc.code}).") from exc
+    except urllib.error.URLError as exc:
+        reason = getattr(exc, "reason", exc)
+        raise ValueError(f"Could not connect to Spotify: {reason}") from exc
+
+    parser = _SpotifyProfileParser()
+    parser.feed(html)
+
+    owner = re.sub(r"\s+on Spotify\s*$", "", parser.page_title).strip()
+    if not owner:
+        owner = normalized_user_id
+
+    seen: set[str] = set()
+    playlists = []
+    for playlist in parser.playlists:
+        if playlist["id"] in seen:
+            continue
+        seen.add(playlist["id"])
+        playlist["owner"] = owner
+        playlists.append(playlist)
+
+    return {"type": "user_playlists", "playlists": playlists}
 
 
 def _fetch_playlist_direct(playlist_id: str) -> dict:
@@ -925,7 +1020,7 @@ def resolve_query(query: str) -> dict:
             if "user:" in q
             else q.split("/user/")[-1].split("?")[0].split("/")[0].strip()
         )
-        return _fetch_user_playlists_direct(user_id)
+        return _fetch_user_playlists_web(user_id)
 
     return _search_spotify_catalog(spotify, q)
 
@@ -944,36 +1039,15 @@ def main() -> None:
             print(json.dumps({"ok": True}))
             return
 
-        # For user: queries, skip spotDL entirely and use direct API
+        # Profile imports deliberately avoid spotDL. Spotify removed the public
+        # user-playlists Web API endpoint, so parse the public profile page.
         if q.startswith("user:") or "/user/" in q:
             user_id = (
                 q.split("user:")[-1].strip()
                 if "user:" in q
                 else q.split("/user/")[-1].split("?")[0].split("/")[0].strip()
             )
-            if check_credentials_cached():
-                init_spotify()
-                spotify = SpotifyClient()
-                if not SpotifyClient.is_using_official_api():
-                    raise ValueError(
-                        "Fetching user playlists is not supported without active/premium official Spotify API credentials."
-                    )
-            try:
-                out = _fetch_user_playlists_direct(user_id)
-            except Exception as e:
-                print(
-                    f"Warning: Fetching user playlists directly failed ({e}). Falling back to SpotipyFree.",
-                    file=sys.stderr,
-                )
-                init_spotify()
-                from spotdl.utils.spotify import SpotifyClient
-
-                if SpotifyClient.is_using_official_api():
-                    fallback_to_free(e)
-                spotify = SpotifyClient()
-                if not SpotifyClient.is_using_official_api():
-                    raise e
-                out = _fetch_user_playlists_direct(user_id)
+            out = _fetch_user_playlists_web(user_id)
         elif (
             "open.spotify.com" in q or "spotify.link" in q or q.startswith("spotify:")
         ) and "playlist" in q:
@@ -1053,16 +1127,17 @@ def main() -> None:
                     raise e
         print(json.dumps(out))
     except Exception as exc:
-        debug_info = {
-            "error": str(exc),
-            "__file__": __file__,
-            "resolved_ROOT": str(Path(__file__).resolve().parents[2]),
-            "sys_path": sys.path,
-            "cwd": os.getcwd(),
-        }
-        print(
-            json.dumps({"error": f"{str(exc)} | Debug Info: {json.dumps(debug_info)}"})
-        )
+        error_message = str(exc)
+        if os.environ.get("SPOTDL_GUI_DEBUG") == "1":
+            debug_info = {
+                "error": error_message,
+                "__file__": __file__,
+                "resolved_ROOT": str(Path(__file__).resolve().parents[2]),
+                "sys_path": sys.path,
+                "cwd": os.getcwd(),
+            }
+            error_message = f"{error_message} | Debug Info: {json.dumps(debug_info)}"
+        print(json.dumps({"error": error_message}))
         sys.exit(1)
 
 

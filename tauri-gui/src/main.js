@@ -8748,11 +8748,14 @@ setTimeout(() => {
                     const img = pl.image || "default.png";
                     const name = escapeHtml(pl.name);
                     const owner = escapeHtml(pl.owner);
+                    const playlistSize = Number.isFinite(pl.tracks_total)
+                        ? `${pl.tracks_total} tracks`
+                        : "Public playlist";
                     el.innerHTML = `
                     <img src="${img}" style="width:48px;height:48px;object-fit:cover;border-radius:4px;" />
                     <div style="flex:1;text-align:left;">
                         <h4 style="margin:0;font-size:14px;">${name}</h4>
-                        <p style="margin:0;font-size:12px;color:var(--fg-muted);">${pl.tracks_total} tracks \u2022 By ${owner}</p>
+                        <p style="margin:0;font-size:12px;color:var(--fg-muted);">${playlistSize} \u2022 By ${owner}</p>
                     </div>
                 `;
 
@@ -8770,7 +8773,7 @@ setTimeout(() => {
                     resultsContainer.appendChild(el);
                 });
             } catch (err) {
-                resultsContainer.innerHTML = `<p style="color:var(--err);">Error: ${err}</p>`;
+                resultsContainer.innerHTML = `<p style="color:var(--err);">Error: ${escapeHtml(String(err))}</p>`;
             } finally {
                 isFetching = false;
                 if (btnFetch) btnFetch.disabled = false;
